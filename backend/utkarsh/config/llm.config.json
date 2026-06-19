@@ -1,0 +1,11 @@
+{
+  "provider": "gemini",
+  "model": "gemini-1.5-flash",
+  "keyEnv": "GEMINI_API_KEY",
+  "visionEnabled": true,
+  "safety": {
+    "sendRawScreenshot": false,
+    "redactSecretsBeforeRequest": true,
+    "requireUserApprovalForExecution": true
+  }
+}

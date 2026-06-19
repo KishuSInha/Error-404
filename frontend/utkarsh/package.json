@@ -1,0 +1,37 @@
+{
+  "name": "task-pilot-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-platform TaskPilot AI hackathon POC for engineer task prioritization.",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "node scripts/sync-datasets.mjs && node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/serve.mjs dist",
+    "electron": "electron .",
+    "desktop": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "test": "node scripts/sync-datasets.mjs && node src/taskEngine.test.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "ai.taskpilot.desktop",
+    "productName": "TaskPilot AI",
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
