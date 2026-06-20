@@ -549,6 +549,95 @@ function renderPageContent(selected, executionBrief, dynamicPlan) {
 
 // ─── Page Renderers ───────────────────────────────────────────────────────────
 
+// ─── Engineer "My Work" — real-time currently-working + completed section ─────
+function renderEngineerMyWork() {
+  const working = workingTaskIds.map(id => state.prioritized.find(t => t.id === id)).filter(Boolean);
+  const completed = completedTaskIds
+    .map(id => {
+      const t = state.prioritized.find(t2 => t2.id === id);
+      const log = taskTimeLogs[id];
+      return t ? { ...t, log } : null;
+    })
+    .filter(Boolean)
+    .slice(0, 6);
+
+  if (working.length === 0 && completed.length === 0) return "";
+
+  const now = new Date();
+
+  function durationStr(log) {
+    if (!log) return "—";
+    const start = new Date(log.startTime);
+    const end = log.endTime ? new Date(log.endTime) : now;
+    const mins = Math.round((end - start) / 60000);
+    return mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : `${mins}m`;
+  }
+
+  function timeStr(iso) {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  return `
+    <div class="eng-my-work-section" style="margin-bottom:16px;">
+      <div style="display:grid; grid-template-columns: ${working.length > 0 ? "1fr 1fr" : "1fr"}; gap:14px;">
+
+        ${working.length > 0 ? `
+          <div class="eng-panel" style="border-left:4px solid #0c66e4; background:#f4f8ff;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+              <h3 style="margin:0; color:#0c66e4; font-size:14px;">⚡ Currently Working</h3>
+              <span class="tp-status-chip working" style="animation: tp-pulse 1.6s ease infinite;">● Live</span>
+            </div>
+            <div style="display:grid; gap:8px;">
+              ${working.map(t => {
+                const log = taskTimeLogs[t.id];
+                return `
+                  <div style="background:#fff; border:1px solid #c7ddfb; border-radius:8px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
+                    <div style="flex:1; min-width:0;">
+                      <div style="font-size:13px; font-weight:700; color:#172b4d; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(t.canonicalTitle)}</div>
+                      <div style="font-size:11px; color:#5c7fba; margin-top:2px;">
+                        Started ${timeStr(log?.startTime)} · ${durationStr(log)} elapsed · ${t.severity}
+                      </div>
+                    </div>
+                    <div style="display:flex; gap:6px; flex-shrink:0; margin-left:10px;">
+                      <button class="tp-btn-done" data-task-complete="${t.id}" style="font-size:11px; padding:5px 10px;">✓ Done</button>
+                      <button class="tp-btn-cancel" data-task-cancel="${t.id}" style="font-size:11px; padding:5px 8px;">✕</button>
+                    </div>
+                  </div>`;
+              }).join("")}
+            </div>
+          </div>
+        ` : ""}
+
+        ${completed.length > 0 ? `
+          <div class="eng-panel" style="border-left:4px solid #22a06b; background:#f4fff9;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+              <h3 style="margin:0; color:#22a06b; font-size:14px;">✅ Completed Today</h3>
+              <span style="font-size:11px; font-weight:700; color:#216e4e; background:#dcfff1; padding:3px 8px; border-radius:10px;">${completed.length} tasks</span>
+            </div>
+            <div style="display:grid; gap:6px; max-height:240px; overflow-y:auto;">
+              ${completed.map(t => `
+                <div style="background:#fff; border:1px solid #b7e4ce; border-radius:8px; padding:9px 12px; display:flex; justify-content:space-between; align-items:center;">
+                  <div style="flex:1; min-width:0;">
+                    <div style="font-size:13px; font-weight:700; color:#172b4d; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-decoration:line-through; opacity:0.7;">${escapeHtml(t.canonicalTitle)}</div>
+                    <div style="font-size:11px; color:#5b9c73; margin-top:2px;">
+                      ${timeStr(t.log?.startTime)} → ${timeStr(t.log?.endTime)} · ${durationStr(t.log)} · ${t.severity}
+                    </div>
+                  </div>
+                  <span style="font-size:12px; color:#22a06b; font-weight:800; flex-shrink:0; margin-left:8px;">✓</span>
+                </div>`).join("")}
+            </div>
+            <div style="margin-top:10px; text-align:right;">
+              <button class="secondary" style="font-size:11px; padding:5px 12px;" id="generateDailyReportBtnMyWork">📄 View Daily Report</button>
+            </div>
+          </div>
+        ` : ""}
+
+      </div>
+    </div>
+  `;
+}
+
 // ─── Engineer Dashboard (full standalone) ────────────────────────────────────
 function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
   const insights = datasetInsights();
@@ -590,6 +679,9 @@ function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
           <span class="kpi-trend flat">TEE score ${teeSession.trustScore}%</span>
         </div>
       </div>
+      <!-- My Work: Real-time status panel -->
+      ${renderEngineerMyWork()}
+
       <div class="engineer-main-grid">
         <div class="eng-task-board">
           <div class="eng-task-board-header">
@@ -802,10 +894,16 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
               { id: "mgr-github", name: "GitHub PR Reviews", srcId: "GitHub", color: "#24292f", icon: "⌁" },
               { id: "mgr-servicenow", name: "ServiceNow Defects", srcId: "ServiceNow", color: "#bf2600", icon: "△" },
               { id: "mgr-email", name: "Outlook Inbox", srcId: "Outlook Emails", color: "#0c66e4", icon: "📧" },
-              { id: "mgr-slack", name: "Slack Mentions", srcId: "Slack Mentions", color: "#6554c0", icon: "💬" }
+              { id: "mgr-slack", name: "Slack Mentions", srcId: "Slack Mentions", color: "#6554c0", icon: "💬" },
+              { id: "meetings", name: "Meetings", srcId: "meetings", color: "#8b5cf6", icon: "◷" }
             ].map(src => {
-              const count = state.prioritized.filter(t => t.sources.some(s => s.toLowerCase().includes(src.srcId.toLowerCase())) && !completedTaskIds.includes(t.id)).length;
-              const p1Count = state.prioritized.filter(t => t.sources.some(s => s.toLowerCase().includes(src.srcId.toLowerCase())) && t.severity === "P1" && !completedTaskIds.includes(t.id)).length;
+              const isMeetings = src.id === "meetings";
+              const count = isMeetings
+                ? meetingsList.length
+                : state.prioritized.filter(t => t.sources.some(s => s.toLowerCase().includes(src.srcId.toLowerCase())) && !completedTaskIds.includes(t.id)).length;
+              const p1Count = isMeetings
+                ? meetingsList.filter(m => m.priority === "Critical" || m.priority === "High").length
+                : state.prioritized.filter(t => t.sources.some(s => s.toLowerCase().includes(src.srcId.toLowerCase())) && t.severity === "P1" && !completedTaskIds.includes(t.id)).length;
               return `
                 <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border:1px solid #dfe3ea; border-radius:6px; background:#fff; cursor:pointer;" data-nav="${src.id}">
                   <div style="display:flex; align-items:center; gap:8px;">
@@ -813,8 +911,8 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
                     <strong style="color:#172b4d; font-size:12px;">${src.name}</strong>
                   </div>
                   <div style="display:flex; align-items:center; gap:6px;">
-                    <span style="font-size:11px; padding:2px 7px; border-radius:10px; background:#f1f2f4; color:#44546f; font-weight:700;">${count} active</span>
-                    ${p1Count > 0 ? `<span style="font-size:10px; padding:2px 6px; border-radius:4px; background:#ffd5d2; color:#ae2a19; font-weight:800;">${p1Count} P1</span>` : ""}
+                    <span style="font-size:11px; padding:2px 7px; border-radius:10px; background:#f1f2f4; color:#44546f; font-weight:700;">${count} ${isMeetings ? "total" : "active"}</span>
+                    ${p1Count > 0 ? `<span style="font-size:10px; padding:2px 6px; border-radius:4px; background:${isMeetings ? "#ede9fe" : "#ffd5d2"}; color:${isMeetings ? "#5b21b6" : "#ae2a19"}; font-weight:800;">${p1Count} ${isMeetings ? "urgent" : "P1"}</span>` : ""}
                   </div>
                 </div>
               `;
@@ -919,6 +1017,22 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
             <h3 style="display:flex;justify-content:space-between;align-items:center;">
               Team Portal <span style="font-size:12px;color:#626f86;font-weight:500;">${managerTaskPosts.length} posted</span>
             </h3>
+            <!-- Live activity feed -->
+            ${managerActivityFeed.length > 0 ? `
+              <div style="margin-bottom:12px; border-bottom:1px solid #f1f2f4; padding-bottom:12px;">
+                <p class="eyebrow" style="margin-bottom:6px; font-size:10px; color:#22a06b;">🟢 LIVE UPDATES</p>
+                <div style="display:grid; gap:5px; max-height:120px; overflow-y:auto;">
+                  ${managerActivityFeed.slice(0, 5).map(e => `
+                    <div style="display:flex; align-items:flex-start; gap:7px; padding:6px 8px; background:#f4fff9; border:1px solid #b7e4ce; border-radius:6px;">
+                      <span style="width:7px; height:7px; border-radius:50%; background:${e.color || "#22a06b"}; flex-shrink:0; margin-top:4px;"></span>
+                      <div style="flex:1; min-width:0;">
+                        <div style="font-size:12px; color:#172b4d; font-weight:600;">${escapeHtml(e.message)}</div>
+                        <div style="font-size:10px; color:#626f86;">${e.time}</div>
+                      </div>
+                    </div>`).join("")}
+                </div>
+              </div>
+            ` : ""}
             <div class="mgr-portal-list">
               ${managerTaskPosts.length === 0
                 ? `<p style="color:#626f86;font-size:13px;text-align:center;padding:20px 0;">No tasks posted yet. Use TaskPilot AI Assign above.</p>`
@@ -3097,6 +3211,9 @@ function bindEvents() {
   document.querySelector("#generateDailyReportBtn")?.addEventListener("click", () => {
     generateDailyReportPDF();
   });
+  document.querySelector("#generateDailyReportBtnMyWork")?.addEventListener("click", () => {
+    generateDailyReportPDF();
+  });
 
   // Today Priority - Daily plan generation (calls Gemini directly)
   document.querySelector("#regeneratePlanBtn")?.addEventListener("click", async () => {
@@ -3836,14 +3953,181 @@ function _markMeetingSaved(meetingToSave) {
   }
 }
 
-// ─── Companion Actions Logic ──────────────────────────────────────────────────
-function pushCompanion(role, text, rerender = true) {
-  companionLog = [...companionLog, { role, text }].slice(-6);
-  if (rerender) render();
+// ─── Agent Intent Parser — detects structured intents before calling Gemini ───
+function parseAgentIntent(intent) {
+  const q = intent.toLowerCase().trim();
+
+  // Top N tasks
+  const topMatch = q.match(/top\s*(\d+)?\s*(tasks?|priorities|work|queue|items?)/);
+  if (topMatch || /show.*(queue|tasks|priorities)|what.*should.*do|my (tasks?|priorities|queue)|list.*tasks?/i.test(q)) {
+    const n = parseInt(topMatch?.[1] || "5");
+    return { type: "top_tasks", n: Math.min(n || 5, 10) };
+  }
+
+  // Blockers
+  if (/block|waiting|stuck|held up|depend/i.test(q)) return { type: "blockers" };
+
+  // Overloaded engineers / team workload
+  if (/overload|workload|capacity|team load|who.*most|busy/i.test(q)) return { type: "workload" };
+
+  // P1 escalations
+  if (/p1|escalat|critical|urgent|sla/i.test(q)) return { type: "p1_tasks" };
+
+  // Completed today
+  if (/complet|done|finish|what.*did.*do|today.*done/i.test(q)) return { type: "completed" };
+
+  // Meetings
+  if (/meeting|calendar|schedule|zoom|standup/i.test(q)) return { type: "meetings" };
+
+  // Tie / same score
+  if (/tie|same score|same priority|equal/i.test(q)) return { type: "ties" };
+
+  return null;
+}
+
+// ─── Structured Agent Response Builder ────────────────────────────────────────
+function buildAgentResponse(intent) {
+  const parsed = parseAgentIntent(intent);
+  if (!parsed) return null;
+
+  const queue = activeQueue();
+  const sevColor = { P1: "#de350b", P2: "#974f0c", P3: "#216e4e", P4: "#626f86" };
+
+  function taskCard(t, rank) {
+    const color = sevColor[t.severity] || "#626f86";
+    const isWorking = workingTaskIds.includes(t.id);
+    const isDone = completedTaskIds.includes(t.id);
+    return `<div class="agent-task-card" data-task="${t.id}" style="background:#fff;border:1px solid #e8e0d5;border-left:3px solid ${color};border-radius:8px;padding:10px 12px;margin:5px 0;cursor:pointer;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div style="flex:1;min-width:0;">
+          ${rank ? `<span style="font-size:10px;font-weight:800;color:#94a3b8;display:block;margin-bottom:2px;">#${rank}</span>` : ""}
+          <strong style="font-size:13px;color:#172b4d;display:block;line-height:1.3;">${escapeHtml(t.canonicalTitle)}</strong>
+          <div style="font-size:11px;color:#64748b;margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;">
+            <span style="background:${color}18;color:${color};padding:1px 6px;border-radius:4px;font-weight:800;">${t.severity}</span>
+            <span>📍 ${escapeHtml(t.sources.join(" + "))}</span>
+            ${t.due ? `<span>📅 ${formatDue(t.due)}</span>` : ""}
+            <span>⚡ ${t.score} pts</span>
+          </div>
+        </div>
+        ${isWorking ? `<span style="font-size:10px;font-weight:800;color:#0c66e4;background:#e8f0fe;padding:2px 7px;border-radius:10px;flex-shrink:0;">● Working</span>` : ""}
+        ${isDone ? `<span style="font-size:10px;font-weight:800;color:#22a06b;background:#dcfff1;padding:2px 7px;border-radius:10px;flex-shrink:0;">✓ Done</span>` : ""}
+      </div>
+      ${!isDone && !isWorking ? `<div style="margin-top:8px;"><button class="tp-btn-start" data-task-start="${t.id}" style="font-size:11px;padding:4px 10px;">▶ Start</button></div>` : ""}
+    </div>`;
+  }
+
+  switch (parsed.type) {
+    case "top_tasks": {
+      const tasks = queue.slice(0, parsed.n);
+      if (tasks.length === 0) return { html: `<span>🎉 Your queue is clear! No pending tasks.</span>`, chips: ["Add a task", "Show completed", "Anything else?"] };
+      const header = `<strong>Your top ${tasks.length} prioritized tasks:</strong>`;
+      const cards = tasks.map((t, i) => taskCard(t, i + 1)).join("");
+      const chips = ["✅ Start top task", "📄 Daily report", "🔴 Show blockers", "🚀 Anything else?"];
+      return { html: header + cards, chips };
+    }
+    case "blockers": {
+      const blockers = queue.filter(t => t.dependencies.some(d => /block|waiting|eta|approval/i.test(d)));
+      if (blockers.length === 0) return { html: `<span>✅ No active blockers detected in your queue right now.</span>`, chips: ["Top 5 tasks", "Show P1s", "Anything else?"] };
+      const header = `<strong>🚧 ${blockers.length} blocker${blockers.length > 1 ? "s" : ""} in your queue:</strong>`;
+      return { html: header + blockers.map(t => taskCard(t, null)).join(""), chips: ["Escalate to manager", "Top 5 tasks", "Anything else?"] };
+    }
+    case "p1_tasks": {
+      const p1s = queue.filter(t => t.severity === "P1");
+      if (p1s.length === 0) return { html: `<span>✅ No P1 escalations in queue right now.</span>`, chips: ["Top 5 tasks", "Show blockers", "Anything else?"] };
+      return { html: `<strong>🔴 ${p1s.length} P1 escalation${p1s.length > 1 ? "s" : ""}:</strong>` + p1s.map(t => taskCard(t, null)).join(""), chips: ["▶ Start top P1", "📄 Daily report", "Anything else?"] };
+    }
+    case "workload": {
+      const ownerMap = {};
+      state.prioritized.forEach(t => {
+        const o = t.owner || "Unassigned";
+        if (!ownerMap[o]) ownerMap[o] = { total: 0, p1: 0, done: 0 };
+        ownerMap[o].total++;
+        if (t.severity === "P1") ownerMap[o].p1++;
+        if (completedTaskIds.includes(t.id)) ownerMap[o].done++;
+      });
+      const rows = Object.entries(ownerMap).sort((a, b) => b[1].total - a[1].total).slice(0, 6)
+        .map(([name, d]) => {
+          const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
+          const isOverloaded = d.total >= 8 || d.p1 >= 3;
+          return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:#fff;border:1px solid #e8e0d5;border-radius:7px;margin:4px 0;">
+            <div>
+              <strong style="font-size:12px;color:#172b4d;">${escapeHtml(name)}</strong>
+              ${isOverloaded ? `<span style="font-size:10px;color:#de350b;font-weight:800;margin-left:6px;">⚠ Overloaded</span>` : ""}
+              <div style="font-size:11px;color:#64748b;">${d.total} tasks · ${d.p1} P1 · ${d.done} done</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:11px;font-weight:700;color:${pct >= 50 ? "#22a06b" : "#974f0c"};">${pct}% done</div>
+            </div>
+          </div>`;
+        }).join("");
+      return { html: `<strong>👥 Team workload:</strong>` + rows, chips: ["Show blockers", "Top 5 tasks", "Assign task", "Anything else?"] };
+    }
+    case "completed": {
+      const done = completedTaskIds.map(id => {
+        const t = state.prioritized.find(x => x.id === id);
+        const log = taskTimeLogs[id];
+        return t ? { ...t, log } : null;
+      }).filter(Boolean);
+      if (done.length === 0) return { html: `<span>No tasks completed yet today. Start one from your queue!</span>`, chips: ["Top 5 tasks", "▶ Start top task", "Anything else?"] };
+      const rows = done.map(t => {
+        const log = t.log;
+        const dur = log?.startTime && log?.endTime
+          ? Math.round((new Date(log.endTime) - new Date(log.startTime)) / 60000) + " min"
+          : "—";
+        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#f4fff9;border:1px solid #b7e4ce;border-radius:7px;margin:4px 0;">
+          <span style="color:#22a06b;font-weight:800;">✓</span>
+          <div style="flex:1;min-width:0;">
+            <strong style="font-size:12px;color:#172b4d;">${escapeHtml(t.canonicalTitle)}</strong>
+            <div style="font-size:11px;color:#64748b;">${t.severity} · ${dur}</div>
+          </div>
+        </div>`;
+      }).join("");
+      return { html: `<strong>✅ ${done.length} task${done.length > 1 ? "s" : ""} completed today:</strong>` + rows, chips: ["📄 Daily report", "Top 5 tasks", "Anything else?"] };
+    }
+    case "meetings": {
+      if (meetingsList.length === 0) return { html: `<span>No meetings found. Run the Meeting Agent to scan your inbox.</span>`, chips: ["Go to Meetings", "Top 5 tasks", "Anything else?"] };
+      const rows = meetingsList.slice(0, 4).map(m => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:#fff;border:1px solid #e8e0d5;border-radius:7px;margin:4px 0;">
+          <div style="flex:1;min-width:0;">
+            <strong style="font-size:12px;color:#172b4d;">${escapeHtml(m.title)}</strong>
+            <div style="font-size:11px;color:#64748b;">📅 ${m.suggestedDate} ${m.suggestedTime || ""} · ${m.duration} min</div>
+          </div>
+          <span style="font-size:10px;padding:2px 7px;border-radius:10px;background:${m.priority === "Critical" ? "#ffd5d2" : "#fff0b3"};color:${m.priority === "Critical" ? "#ae2a19" : "#974f0c"};font-weight:800;flex-shrink:0;">${m.priority}</span>
+        </div>`).join("");
+      return { html: `<strong>📅 ${meetingsList.length} meetings detected:</strong>` + rows, chips: ["Go to Meetings", "Run Meeting Agent", "Top 5 tasks", "Anything else?"] };
+    }
+    case "ties": {
+      const scoreGroups = {};
+      queue.forEach(t => { if (!scoreGroups[t.score]) scoreGroups[t.score] = []; scoreGroups[t.score].push(t); });
+      const ties = Object.entries(scoreGroups).filter(([, ts]) => ts.length > 1);
+      if (ties.length === 0) return { html: `<span>✅ No tied scores — every task has a unique rank right now.</span>`, chips: ["Top 5 tasks", "Anything else?"] };
+      const rows = ties.slice(0, 3).map(([score, ts]) =>
+        `<div style="padding:8px 10px;background:#fff;border:1px solid #e8e0d5;border-radius:7px;margin:4px 0;">
+          <div style="font-size:11px;font-weight:800;color:#64748b;margin-bottom:4px;">Score ${score} — ${ts.length} tasks tied</div>
+          ${ts.map(t => `<div style="font-size:12px;color:#172b4d;padding:2px 0;">• ${escapeHtml(t.canonicalTitle)} (${t.sources.length} src, due ${formatDue(t.due)})</div>`).join("")}
+          <div style="font-size:11px;color:#0c66e4;margin-top:4px;">Tiebreaker: more sources → earlier due → blocker signal → shorter time</div>
+        </div>`
+      ).join("");
+      return { html: `<strong>⚖️ ${ties.length} tie group${ties.length > 1 ? "s" : ""} found:</strong>` + rows, chips: ["Top 5 tasks", "Anything else?"] };
+    }
+    default:
+      return null;
+  }
 }
 
 async function runCompanionWorkflow(intent, options = {}) {
   if (isProcessing) return;
+
+  // ── Summary / Report intent — generate PDF immediately ─────────────────────
+  const intentLower = intent.toLowerCase();
+  if (/\b(summary|report|daily report|end.?of.?day|eod|what did i do|what have i done|show report|generate report|pdf)\b/.test(intentLower)) {
+    pushCompanion("user", intent, false);
+    pushCompanion("agent", "Generating your end-of-day summary report as a PDF… Opening now.", false);
+    render();
+    await generateDailyReportPDF();
+    return;
+  }
+
   companionOpen = true;
   isProcessing = true;
   activeRunId += 1;
@@ -4040,8 +4324,10 @@ async function analyzeScreenWithTaskPilot(dataUrl, sourceName) {
 async function loadUserProfile() {
   if (!authSession) return;
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
     const url = `http://127.0.0.1:8787/api/settings/profile?email=${encodeURIComponent(authSession.email)}&id=${encodeURIComponent(authSession.userId || "")}`;
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
     const data = await response.json();
     if (data.profile) {
       settingsProfile.name = data.profile.full_name || data.profile.display_name || authSession.name;
@@ -4049,16 +4335,24 @@ async function loadUserProfile() {
       settingsProfile.email = data.profile.email || authSession.email;
     }
   } catch (err) {
-    console.error("Failed to load user profile:", err);
+    // Backend offline — use session data
   }
 }
 
 async function loadBackendConfig() {
+  // Fast 2s timeout so the app renders immediately if backend is down
+  const fetchWithTimeout = (url, opts = {}, ms = 2000) => {
+    if (typeof AbortController === "undefined") return fetch(url, opts);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+  };
+
   try {
     if (window.taskPilotDesktop?.getBackendConfig) {
       backendConfig = await window.taskPilotDesktop.getBackendConfig();
     } else {
-      const response = await fetch("http://127.0.0.1:8787/api/taskpilot/config");
+      const response = await fetchWithTimeout("http://127.0.0.1:8787/api/taskpilot/config");
       backendConfig = await response.json();
     }
   } catch {
@@ -4067,7 +4361,7 @@ async function loadBackendConfig() {
 
   // Fetch live state from backend to synchronize the local state
   try {
-    const response = await fetch("http://127.0.0.1:8787/api/taskpilot/state");
+    const response = await fetchWithTimeout("http://127.0.0.1:8787/api/taskpilot/state");
     const data = await response.json();
     if (data.success) {
       completedTaskIds = data.completedTaskIds || [];
@@ -4090,7 +4384,7 @@ async function loadBackendConfig() {
       state = buildState(sources, calendarBlocks);
     }
   } catch (err) {
-    console.error("Failed to load task state from backend:", err);
+    console.warn("Backend offline — using local state:", err.message);
   }
 
   // Only clear sessions that have no userId AND are from google-supabase (truly malformed).
@@ -4101,11 +4395,8 @@ async function loadBackendConfig() {
     localStorage.removeItem("taskpilot:session");
   }
 
-  // Load user profile from backend
+  // Load user profile from backend (best-effort, same timeout)
   await loadUserProfile();
-
-  // In desktop shell with no session, show the login page (do not auto-bypass)
-  // User must sign in with Google to use the app
 }
 
 // ─── Unified Task Completion ──────────────────────────────────────────────────
@@ -4175,6 +4466,7 @@ function completeTask(id) {
 async function generateDailyReportPDF() {
   const today = new Date();
   const dateStr = today.toLocaleDateString("en-US", { weekday:"long", year:"numeric", month:"long", day:"numeric" });
+  const todayISO = today.toISOString().slice(0, 10);
 
   // Get completed task logs
   const completedLogs = Object.entries(taskTimeLogs)
@@ -4185,8 +4477,7 @@ async function generateDailyReportPDF() {
       const durationMs = endDt - startDt;
       const durationMin = Math.round(durationMs / 60000);
       return {
-        ...log,
-        id,
+        ...log, id,
         startStr: startDt.toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit" }),
         endStr: endDt.toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit" }),
         durationMin
@@ -4196,307 +4487,45 @@ async function generateDailyReportPDF() {
   // Remaining tasks for tomorrow
   const remaining = activeQueue().slice(0, 8);
 
-  // Gemini summary
+  // Meetings for today
+  const todayMeetings = meetingsList.filter(m =>
+    m.suggestedDate === todayISO || m.status === "Scheduled"
+  );
+
+  // Total time logged
+  const totalMinutes = completedLogs.reduce((s, l) => s + l.durationMin, 0);
+  const totalTimeStr = totalMinutes >= 60
+    ? `${Math.floor(totalMinutes/60)}h ${totalMinutes%60}m` : `${totalMinutes}m`;
+
+  // Gemini summary + next-day plan
   let aiSummary = "AI summary unavailable.";
+  let nextDayRecommendations = "";
   try {
-    const prompt = `You are TaskPilot AI. Write a professional end-of-day summary for ${settingsProfile.name} (${settingsProfile.role || "Engineer"}).
+    const prompt = `You are TaskPilot AI. Write a professional end-of-day report for ${settingsProfile.name} (${settingsProfile.role || "Engineer"}).
 
 Completed tasks today:
 ${completedLogs.map((l, i) => `${i+1}. ${l.title} [${l.severity}] — ${l.startStr} to ${l.endStr} (${l.durationMin} min)`).join("\n") || "No tasks completed."}
 
-Pending for tomorrow (top priority):
+Meetings attended: ${todayMeetings.map(m => m.title).join(", ") || "none"}
+
+Pending for tomorrow:
 ${remaining.slice(0, 5).map((t, i) => `${i+1}. ${t.canonicalTitle} [${t.severity}] due ${t.due || "TBD"}`).join("\n")}
 
-Write 2-3 sentences summarizing today's accomplishments and a 1-2 sentence recommendation for tomorrow's priorities. Be specific and professional.`;
+Return ONLY valid JSON: { "summary": "2-3 sentence summary", "nextDayPlan": ["point 1", "point 2", "point 3"] }`;
     const r = await geminiChat(prompt);
-    aiSummary = r || aiSummary;
+    try {
+      const parsed = JSON.parse(r.replace(/```json|```/g, "").trim());
+      aiSummary = parsed.summary || r;
+      nextDayRecommendations = (parsed.nextDayPlan || []).join(" · ");
+    } catch { aiSummary = r || aiSummary; }
   } catch { /* use default */ }
 
   // Build HTML for the report
   const logoDataUrlStr = typeof logoDataUrl !== "undefined" ? logoDataUrl : "";
-  const reportHtml = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>Daily Report — ${settingsProfile.name} — ${dateStr}</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap');
-  @page { size: A4; margin: 15mm 15mm 20mm; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
-    color: #1e293b;
-    background: #f8fafc;
-    font-size: 13px;
-    line-height: 1.5;
-    padding: 20px;
-  }
-  .container {
-    max-width: 850px;
-    margin: 0 auto;
-    background: #ffffff;
-    border-radius: 16px;
-    box-shadow: 0 4px 25px rgba(0, 0, 0, 0.04);
-    padding: 35px;
-    border: 1px solid #e2e8f0;
-  }
-  .header {
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    padding-bottom: 24px;
-    border-bottom: 1px solid #e2e8f0;
-    margin-bottom: 26px;
-  }
-  .logo-container {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 64px;
-    height: 64px;
-    border-radius: 16px;
-    background: linear-gradient(135deg, #0c66e4, #00d4aa);
-    padding: 4px;
-    box-shadow: 0 4px 12px rgba(12, 102, 228, 0.15);
-  }
-  .logo {
-    width: 100%;
-    height: 100%;
-    border-radius: 12px;
-    object-fit: cover;
-  }
-  .logo-placeholder {
-    font-family: 'Outfit', sans-serif;
-    font-size: 24px;
-    font-weight: 900;
-    color: #ffffff;
-  }
-  .header-title h1 {
-    font-family: 'Outfit', sans-serif;
-    font-size: 24px;
-    font-weight: 900;
-    color: #0f172a;
-    letter-spacing: -0.02em;
-    line-height: 1.2;
-  }
-  .header-title p {
-    font-size: 12px;
-    color: #64748b;
-    margin-top: 4px;
-    font-weight: 500;
-  }
-  .meta-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
-    margin-bottom: 28px;
-  }
-  .meta-card {
-    padding: 14px 16px;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    background: #f8fafc;
-  }
-  .meta-card label {
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #64748b;
-    display: block;
-    margin-bottom: 6px;
-  }
-  .meta-card span {
-    font-size: 14px;
-    font-weight: 700;
-    color: #0f172a;
-  }
-  h2 {
-    font-family: 'Outfit', sans-serif;
-    font-size: 16px;
-    font-weight: 800;
-    color: #0f172a;
-    margin: 0 0 16px;
-    padding-bottom: 8px;
-    border-bottom: 2px solid #f1f5f9;
-  }
-  section {
-    margin-bottom: 30px;
-  }
-  table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    overflow: hidden;
-    margin-bottom: 8px;
-  }
-  thead tr {
-    background: #0f172a;
-    color: #ffffff;
-  }
-  thead th {
-    padding: 12px 16px;
-    text-align: left;
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  tbody tr:nth-child(even) {
-    background: #f8fafc;
-  }
-  tbody tr:last-child td {
-    border-bottom: none;
-  }
-  tbody td {
-    padding: 12px 16px;
-    font-size: 12px;
-    color: #334155;
-    border-bottom: 1px solid #e2e8f0;
-  }
-  .sev {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 3px 8px;
-    border-radius: 6px;
-    font-size: 10px;
-    font-weight: 800;
-  }
-  .sev.P1 { background: #fee2e2; color: #991b1b; }
-  .sev.P2 { background: #fef3c7; color: #92400e; }
-  .sev.P3 { background: #dcfce7; color: #166534; }
-  .sev.P4 { background: #f1f5f9; color: #475569; }
-  
-  .ai-block {
-    padding: 18px;
-    background: #f0f7ff;
-    border-left: 4px solid #3b82f6;
-    border-radius: 8px;
-    font-size: 13px;
-    line-height: 1.6;
-    color: #1e3a8a;
-  }
-  .tomorrow-list {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-  }
-  .tomorrow-item {
-    padding: 14px;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    background: #ffffff;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .tomorrow-index {
-    font-family: 'Outfit', sans-serif;
-    font-weight: 800;
-    color: #94a3b8;
-    font-size: 12px;
-  }
-  .tomorrow-title {
-    flex: 1;
-    font-weight: 600;
-    color: #0f172a;
-    font-size: 12px;
-  }
-  .tomorrow-due {
-    font-size: 10px;
-    color: #64748b;
-    font-weight: 500;
-  }
-  .footer {
-    margin-top: 40px;
-    padding-top: 20px;
-    border-top: 1px solid #e2e8f0;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 11px;
-    color: #94a3b8;
-  }
-  .no-data {
-    color: #64748b;
-    font-size: 12px;
-    font-style: italic;
-    padding: 16px 0;
-  }
-</style>
-</head>
-<body>
-<div class="container">
-  <div class="header">
-    <div class="logo-container">
-      ${logoDataUrlStr ? `<img src="${logoDataUrlStr}" class="logo" alt="TaskPilot AI">` : `<div class="logo-placeholder">TP</div>`}
-    </div>
-    <div class="header-title">
-      <h1>Daily Engineering Report</h1>
-      <p>TaskPilot AI Companion · ${dateStr}</p>
-    </div>
-  </div>
-
-  <div class="meta-grid">
-    <div class="meta-card"><label>Name of Engineer</label><span>${escapeHtml(settingsProfile.name)}</span></div>
-    <div class="meta-card"><label>Role of Engineer</label><span>${escapeHtml(settingsProfile.role || "Full-stack Engineer")}</span></div>
-    <div class="meta-card"><label>Work Progress</label><span>${completedLogs.length} Completed Today</span></div>
-  </div>
-
-  <section>
-    <h2>✅ Tasks Completed Today</h2>
-    ${completedLogs.length === 0
-      ? `<p class="no-data">No tasks completed today.</p>`
-      : `<table>
-        <thead><tr><th>#</th><th>Task Title</th><th>Source</th><th>Sev</th><th>Start Time</th><th>End Time</th><th>Duration</th></tr></thead>
-        <tbody>
-          ${completedLogs.map((l, i) => `
-            <tr>
-              <td style="font-weight:800; color:#64748b;">${i+1}</td>
-              <td><strong>${escapeHtml(l.title)}</strong></td>
-              <td>${escapeHtml(l.source)}</td>
-              <td><span class="sev ${l.severity}">${l.severity}</span></td>
-              <td style="font-family:monospace; color:#475569;">${l.startStr}</td>
-              <td style="font-family:monospace; color:#475569;">${l.endStr}</td>
-              <td style="font-weight:600; color:#0f172a;">${l.durationMin >= 60 ? `${Math.floor(l.durationMin/60)}h ${l.durationMin%60}m` : `${l.durationMin}m`}</td>
-            </tr>`).join("")}
-        </tbody>
-      </table>`}
-  </section>
-
-  <section>
-    <h2>🤖 AI Summary & Achievements</h2>
-    <div class="ai-block">${escapeHtml(aiSummary)}</div>
-  </section>
-
-  <section>
-    <h2>📅 Priority Focus for Tomorrow</h2>
-    ${remaining.length === 0
-      ? `<p class="no-data">All priorities cleared — nothing pending!</p>`
-      : `<div class="tomorrow-list">
-          ${remaining.slice(0, 6).map((t, i) => `
-            <div class="tomorrow-item">
-              <span class="tomorrow-index">#${i+1}</span>
-              <span class="sev ${t.severity}">${t.severity}</span>
-              <span class="tomorrow-title">${escapeHtml(t.canonicalTitle)}</span>
-              <span class="tomorrow-due">Due ${formatDue(t.due)}</span>
-            </div>`).join("")}
-        </div>`}
-  </section>
-
-  <div class="footer">
-    <span>Generated by TaskPilot AI · ${today.toLocaleString()}</span>
-    <span>${escapeHtml(settingsProfile.name)} · ${escapeHtml(settingsProfile.email || "")}</span>
-  </div>
-</div>
-</body>
-</html>`;
+  const reportHtml = buildReportHTML({ dateStr, completedLogs, todayMeetings, remaining, aiSummary, nextDayRecommendations, totalTimeStr, logoDataUrlStr });
 
   // Open a new window, write the report, print it
-  const printWin = window.open("", "_blank", "width=900,height=700");
+  const printWin = window.open("", "_blank", "width=920,height=750");
   if (!printWin) {
     alert("Please allow popups for TaskPilot AI to generate the PDF report.");
     return;
@@ -4504,7 +4533,119 @@ Write 2-3 sentences summarizing today's accomplishments and a 1-2 sentence recom
   printWin.document.write(reportHtml);
   printWin.document.close();
   printWin.focus();
-  setTimeout(() => printWin.print(), 600);
+  setTimeout(() => printWin.print(), 700);
+}
+
+function buildReportHTML({ dateStr, completedLogs, todayMeetings, remaining, aiSummary, nextDayRecommendations, totalTimeStr, logoDataUrlStr }) {
+  const today = new Date();
+  const css = `
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap');
+    @page { size: A4; margin: 15mm 15mm 20mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; color: #1e293b; background: #f8fafc; font-size: 13px; line-height: 1.5; padding: 20px; }
+    .container { max-width: 850px; margin: 0 auto; background: #fff; border-radius: 16px; box-shadow: 0 4px 25px rgba(0,0,0,0.04); padding: 35px; border: 1px solid #e2e8f0; }
+    .header { display:flex; align-items:center; gap:20px; padding-bottom:24px; border-bottom:1px solid #e2e8f0; margin-bottom:26px; }
+    .logo-container { display:flex; align-items:center; justify-content:center; width:64px; height:64px; border-radius:16px; background:linear-gradient(135deg,#0c66e4,#00d4aa); padding:4px; box-shadow:0 4px 12px rgba(12,102,228,0.15); flex-shrink:0; }
+    .logo { width:100%; height:100%; border-radius:12px; object-fit:cover; }
+    .header-title { font-family:'Outfit',sans-serif; font-size:24px; font-weight:900; color:#0f172a; letter-spacing:-0.02em; line-height:1.2; }
+    .header-sub { font-size:12px; color:#64748b; margin-top:4px; font-weight:500; }
+    .meta-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:26px; }
+    .meta-card { padding:12px 14px; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; }
+    .meta-card label { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.08em; color:#64748b; display:block; margin-bottom:5px; }
+    .meta-card span { font-size:13px; font-weight:700; color:#0f172a; }
+    h2 { font-family:'Outfit',sans-serif; font-size:15px; font-weight:800; color:#0f172a; margin:0 0 12px; padding-bottom:7px; border-bottom:2px solid #f1f5f9; }
+    section { margin-bottom:26px; }
+    table { width:100%; border-collapse:separate; border-spacing:0; border:1px solid #e2e8f0; border-radius:10px; overflow:hidden; }
+    thead tr { background:#0f172a; color:#fff; }
+    thead th { padding:10px 12px; text-align:left; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; }
+    tbody tr:nth-child(even) { background:#f8fafc; }
+    tbody tr:last-child td { border-bottom:none; }
+    tbody td { padding:10px 12px; font-size:12px; color:#334155; border-bottom:1px solid #e2e8f0; }
+    .sev { display:inline-flex; align-items:center; justify-content:center; padding:3px 7px; border-radius:5px; font-size:10px; font-weight:800; }
+    .sev.P1 { background:#fee2e2; color:#991b1b; }
+    .sev.P2 { background:#fef3c7; color:#92400e; }
+    .sev.P3 { background:#dcfce7; color:#166534; }
+    .sev.P4 { background:#f1f5f9; color:#475569; }
+    .ai-block { padding:14px 16px; background:#f0f7ff; border-left:4px solid #3b82f6; border-radius:8px; font-size:13px; line-height:1.6; color:#1e3a8a; }
+    .next-day-block { padding:12px 16px; background:#f0fdf4; border-left:4px solid #22c55e; border-radius:8px; font-size:13px; line-height:1.6; color:#14532d; margin-top:10px; }
+    .tomorrow-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+    .tomorrow-item { padding:11px 13px; border:1px solid #e2e8f0; border-radius:9px; background:#fff; display:flex; align-items:center; gap:9px; }
+    .meeting-row { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:8px; background:#fafafe; margin-bottom:8px; }
+    .footer { margin-top:32px; padding-top:16px; border-top:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#94a3b8; }
+    .no-data { color:#64748b; font-size:12px; font-style:italic; padding:10px 0; }
+  `;
+
+  const logo = logoDataUrlStr ? `<img src="${logoDataUrlStr}" class="logo" alt="TaskPilot AI">` : `<span style="font-family:Outfit;font-size:22px;font-weight:900;color:#fff;">TP</span>`;
+
+  const completedSection = completedLogs.length === 0
+    ? `<p class="no-data">No tasks completed today.</p>`
+    : `<table><thead><tr><th>#</th><th>Task Title</th><th>Source</th><th>Sev</th><th>Start</th><th>End</th><th>Duration</th></tr></thead><tbody>
+        ${completedLogs.map((l, i) => `<tr>
+          <td style="font-weight:800;color:#64748b;">${i+1}</td>
+          <td><strong>${escapeHtml(l.title)}</strong></td>
+          <td style="font-size:11px;color:#64748b;">${escapeHtml(l.source)}</td>
+          <td><span class="sev ${l.severity}">${l.severity}</span></td>
+          <td style="font-family:monospace;color:#475569;font-size:12px;">${l.startStr}</td>
+          <td style="font-family:monospace;color:#475569;font-size:12px;">${l.endStr}</td>
+          <td style="font-weight:700;">${l.durationMin >= 60 ? `${Math.floor(l.durationMin/60)}h ${l.durationMin%60}m` : `${l.durationMin}m`}</td>
+        </tr>`).join("")}
+      </tbody></table>`;
+
+  const meetingsSection = todayMeetings.length > 0 ? `
+    <section><h2>📅 Meetings Today</h2>
+      ${todayMeetings.map(m => `<div class="meeting-row">
+        <div style="width:32px;height:32px;border-radius:8px;background:#ede9fe;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;">◷</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:13px;color:#0f172a;">${escapeHtml(m.title)}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">${m.suggestedTime || "TBD"} · ${m.duration} min · ${(m.attendees||[]).length} attendees</div>
+        </div>
+        <span style="padding:3px 8px;border-radius:10px;background:#ede9fe;color:#5b21b6;font-size:10px;font-weight:800;">${m.priority || "Medium"}</span>
+      </div>`).join("")}
+    </section>` : "";
+
+  const tomorrowSection = remaining.length === 0
+    ? `<p class="no-data">All priorities cleared!</p>`
+    : `<div class="tomorrow-grid">${remaining.slice(0, 6).map((t, i) => `
+        <div class="tomorrow-item">
+          <span style="font-weight:800;color:#94a3b8;font-size:12px;">#${i+1}</span>
+          <span class="sev ${t.severity}">${t.severity}</span>
+          <span style="flex:1;font-weight:600;color:#0f172a;font-size:12px;">${escapeHtml(t.canonicalTitle)}</span>
+          <span style="font-size:10px;color:#64748b;white-space:nowrap;">Due ${formatDue(t.due)}</span>
+        </div>`).join("")}
+      </div>`;
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>Daily Report — ${escapeHtml(settingsProfile.name)} — ${dateStr}</title>
+  <style>${css}</style></head><body><div class="container">
+    <div class="header">
+      <div class="logo-container">${logo}</div>
+      <div style="flex:1;">
+        <div class="header-title">Daily Engineering Report</div>
+        <div class="header-sub">TaskPilot AI · ${dateStr}</div>
+      </div>
+      <div style="text-align:right;font-size:11px;color:#64748b;"><div style="font-weight:800;font-size:13px;color:#0f172a;">TaskPilot AI</div><div>taskpilot.dev</div></div>
+    </div>
+    <div class="meta-grid">
+      <div class="meta-card"><label>Name</label><span>${escapeHtml(settingsProfile.name)}</span></div>
+      <div class="meta-card"><label>Role</label><span>${escapeHtml(settingsProfile.role || "Full-stack Engineer")}</span></div>
+      <div class="meta-card"><label>Tasks Done</label><span>${completedLogs.length} today</span></div>
+      <div class="meta-card"><label>Time Logged</label><span>${totalTimeStr}</span></div>
+    </div>
+    <section><h2>✅ Tasks Completed Today</h2>${completedSection}</section>
+    ${meetingsSection}
+    <section><h2>🤖 AI Summary & Achievements</h2>
+      <div class="ai-block">${escapeHtml(aiSummary)}</div>
+      ${nextDayRecommendations ? `<div class="next-day-block"><strong>Tomorrow's focus:</strong> ${escapeHtml(nextDayRecommendations)}</div>` : ""}
+    </section>
+    <section><h2>📅 Priority Focus for Tomorrow</h2>${tomorrowSection}</section>
+    <div class="footer">
+      <div style="display:flex;align-items:center;gap:8px;">
+        ${logoDataUrlStr ? `<img src="${logoDataUrlStr}" style="width:16px;height:16px;border-radius:3px;object-fit:cover;">` : ""}
+        Generated by TaskPilot AI · ${today.toLocaleString()}
+      </div>
+      <span>${escapeHtml(settingsProfile.name)} · ${escapeHtml(settingsProfile.email || "")} · ${escapeHtml(settingsProfile.role || "Engineer")}</span>
+    </div>
+  </div></body></html>`;
 }
 
 // ─── Desktop floating panel task completion listener ──────────────────────────
@@ -4518,4 +4659,7 @@ if (window.taskPilotDesktop?.onCompleteTask) {
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+// Render immediately so the page isn't blank while backend connects
+render();
+// Then load backend config/state and re-render with live data
 loadBackendConfig().finally(render);

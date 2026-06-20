@@ -1,51 +1,56 @@
 {
   "completedTaskIds": [
-    "task-139"
+    "task-test-1",
+    "task-1"
   ],
   "workingTaskIds": [],
   "taskTimeLogs": {
+    "task-test-1": {
+      "title": "Test task",
+      "severity": "P2",
+      "source": "Jira",
+      "startTime": "2026-06-20T09:00:00Z",
+      "endTime": "2026-06-20T09:30:00Z"
+    },
     "task-1": {
       "title": "VP escalation: upload timeout needs ETA",
       "severity": "P1",
       "source": "Outlook Emails + ServiceNow Defects + Jira Sprint Board + Slack Mentions",
-      "startTime": "2026-06-20T09:16:18.177Z",
-      "endTime": "2026-06-20T09:46:18.177Z"
-    },
-    "task-139": {
-      "title": "Security review blocking identity release",
-      "severity": "P1",
-      "source": "Slack Mentions + GitHub",
-      "startTime": "2026-06-20T09:18:08.632Z",
-      "endTime": "2026-06-20T09:48:08.632Z"
+      "startTime": "2026-06-20T15:55:33.057Z",
+      "endTime": "2026-06-20T16:25:33.057Z"
     }
   },
   "managerActivityFeed": [
     {
-      "message": "\u2713 Utkarsh Sinha completed \"Security review blocking identity release\" (P1)",
+      "message": "✓ Utkarsh Sinha completed \"VP escalation: upload timeout needs ETA\" (P1)",
       "color": "#22a06b",
-      "time": "03:18 PM",
-      "taskId": "task-139"
+      "time": "09:55 PM",
+      "taskId": "task-1"
+    },
+    {
+      "message": "✓ Test completed",
+      "color": "#22a06b",
+      "time": "09:30 AM",
+      "taskId": "task-test-1"
     }
   ],
   "managerTaskPosts": [
     {
-      "id": "DONE-task-139",
-      "title": "Security review blocking identity release",
-      "description": "Completed by Utkarsh Sinha at 03:18 PM",
+      "id": "DONE-task-1",
+      "title": "VP escalation: upload timeout needs ETA",
+      "description": "Completed by Utkarsh Sinha at 09:55 PM",
       "priority": "P1",
       "status": "Completed",
       "postedBy": "Utkarsh Sinha",
-      "postedAt": "2026-06-20T09:48:08.632Z",
+      "postedAt": "2026-06-20T16:25:33.057Z",
       "type": "completion"
     },
     {
-      "id": "DONE-task-1",
-      "title": "VP escalation: upload timeout needs ETA",
-      "description": "Completed by Utkarsh Sinha at 03:16 PM",
-      "priority": "P1",
+      "id": "DONE-task-test-1",
+      "title": "Test task",
       "status": "Completed",
-      "postedBy": "Utkarsh Sinha",
-      "postedAt": "2026-06-20T09:46:18.177Z",
+      "postedBy": "Test",
+      "postedAt": "2026-06-20T09:30:00Z",
       "type": "completion"
     }
   ],

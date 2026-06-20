@@ -27,7 +27,7 @@ async function callGemini(prompt, { model, maxTokens = 512, temperature = 0.4 } 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: { maxOutputTokens: maxTokens, temperature }
     })
   });

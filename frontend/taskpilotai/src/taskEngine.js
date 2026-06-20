@@ -149,7 +149,24 @@ export function prioritize(tasks, model = trainPriorityModel(tasks.flatMap((task
         ]
       };
     })
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => {
+      // Primary: score descending
+      if (b.score !== a.score) return b.score - a.score;
+      // Tiebreaker 1: more corroborating sources wins (cross-system signal = higher confidence)
+      if (b.sources.length !== a.sources.length) return b.sources.length - a.sources.length;
+      // Tiebreaker 2: earlier due date wins
+      const aDue = a.due ? new Date(a.due).getTime() : Infinity;
+      const bDue = b.due ? new Date(b.due).getTime() : Infinity;
+      if (aDue !== bDue) return aDue - bDue;
+      // Tiebreaker 3: task with active blocker/dependency keyword wins
+      const aBlocked = (a.dependencies || []).some(d => /block|waiting|eta|approval/i.test(d)) ? 1 : 0;
+      const bBlocked = (b.dependencies || []).some(d => /block|waiting|eta|approval/i.test(d)) ? 1 : 0;
+      if (bBlocked !== aBlocked) return bBlocked - aBlocked;
+      // Tiebreaker 4: shorter estimated time wins (quick win first)
+      const aMins = a.execution?.estimatedMinutes || 60;
+      const bMins = b.execution?.estimatedMinutes || 60;
+      return aMins - bMins;
+    });
 }
 
 export function createDailyPlan(tasks, calendarBlocks) {
@@ -212,6 +229,26 @@ export function answerQuery(query, state) {
   if (q.includes("top") || q.includes("priority")) {
     return `${top.canonicalTitle} is #1 because ${top.rankReasons.slice(0, 3).join(", ")}.`;
   }
+  if (q.includes("tie") || q.includes("same score") || q.includes("same priority") || q.includes("equal")) {
+    // Find tasks with equal scores
+    const scoreGroups = {};
+    state.prioritized.forEach(t => {
+      if (!scoreGroups[t.score]) scoreGroups[t.score] = [];
+      scoreGroups[t.score].push(t);
+    });
+    const ties = Object.entries(scoreGroups).filter(([, tasks]) => tasks.length > 1);
+    if (ties.length === 0) return "No tasks have equal scores right now — every task has a unique priority rank.";
+    const [tieScore, tieTasks] = ties[0];
+    const winner = tieTasks[0];
+    const loser = tieTasks[1];
+    const reason =
+      winner.sources.length !== loser.sources.length
+        ? `${winner.canonicalTitle} has ${winner.sources.length} corroborating sources vs ${loser.sources.length} — more systems agree on this task`
+        : winner.due && loser.due && winner.due !== loser.due
+        ? `${winner.canonicalTitle} is due ${winner.due} vs ${loser.due} — earlier deadline wins the tie`
+        : `${winner.canonicalTitle} has an active blocker or shorter estimated time — tiebreaker applied`;
+    return `${ties.length} tie group(s) found at score ${tieScore}. ${reason}. Tiebreakers: source count → earliest due date → blocker signal → shortest time.`;
+  }
   if (q.includes("email") || q.includes("summar")) {
     const emails = state.prioritized.filter((task) => task.sources.includes("Outlook Emails"));
     return `${emails.length} email-derived action items found: ${emails.map((task) => task.canonicalTitle).join("; ")}.`;
@@ -227,7 +264,7 @@ export function answerQuery(query, state) {
   if (q.includes("manager") || q.includes("standup")) {
     return `Standup summary: ${state.completedCount} completed, ${state.prioritized.length} active, top risk is ${top.canonicalTitle}, and ${state.alerts.length} proactive alerts are open.`;
   }
-  return `I can explain priority, summarize emails, show duplicates, list blockers, or prepare a manager standup update.`;
+  return `I can explain priority, summarize emails, show duplicates, list blockers, explain tie-breaking, or prepare a manager standup update.`;
 }
 
 export function buildState(sources, calendarBlocks) {

@@ -14,6 +14,14 @@ class TaskPrioritizer:
         self.model_name = os.getenv("LLM_MODEL") or "gemini-2.5-flash"
         self.model = True if self.api_key else None
 
+        # Priority weights from environment variables
+        self.weights = {
+            "severity": float(os.getenv("PRIORITY_WEIGHT_SEVERITY", 0.4)),
+            "deadline": float(os.getenv("PRIORITY_WEIGHT_DEADLINE", 0.3)),
+            "dependencies": float(os.getenv("PRIORITY_WEIGHT_DEPENDENCIES", 0.2)),
+            "businessImpact": float(os.getenv("PRIORITY_WEIGHT_BUSINESS_IMPACT", 0.1))
+        }
+
     def _call_gemini_vertex(self, prompt, max_tokens=1024, temperature=0.7) -> str:
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY not configured")
@@ -36,14 +44,6 @@ class TaskPrioritizer:
         data = resp.json()
         text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
         return text.strip()
-
-        # Priority weights from environment variables
-        self.weights = {
-            "severity": float(os.getenv("PRIORITY_WEIGHT_SEVERITY", 0.4)),
-            "deadline": float(os.getenv("PRIORITY_WEIGHT_DEADLINE", 0.3)),
-            "dependencies": float(os.getenv("PRIORITY_WEIGHT_DEPENDENCIES", 0.2)),
-            "businessImpact": float(os.getenv("PRIORITY_WEIGHT_BUSINESS_IMPACT", 0.1))
-        }
 
     def calculatePriorityScore(self, task):
         scores = {

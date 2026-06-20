@@ -1,426 +1,330 @@
 """
-Dataset Cleaning Script for TaskPilot AI
-Cleans and validates all data sources according to problem statement requirements
+TaskPilot AI — Full NLP Data Pipeline
+Steps: Ingest → Standardize → Clean → NLP → Entity Extraction →
+       Hidden Task Detection → Semantic Dedup → Dependency Graph →
+       Feature Engineering → Priority Scoring → Daily Plan → Save
+
+Install deps:
+  pip install pandas numpy spacy sentence-transformers scikit-learn rapidfuzz networkx dateparser
+  python -m spacy download en_core_web_sm
 """
 
+import re
 import json
 import os
-from datetime import datetime
-from typing import Dict, List, Any
+import warnings
+import pandas as pd
+import numpy as np
+from pathlib import Path
 
-class DatasetCleaner:
-    """Cleans and normalizes task data from multiple sources"""
-    
-    def __init__(self, dataset_dir='./datasets'):
-        self.dataset_dir = dataset_dir
-        self.cleaned_data = {}
-        
-    def clean_jira_sprint_board(self, filepath: str) -> List[Dict[str, Any]]:
-        """Clean and normalize Jira sprint board data"""
-        print("🧹 Cleaning Jira Sprint Board...")
-        
-        with open(filepath, 'r') as f:
-            raw_data = json.load(f)
-        
-        # Handle nested structure
-        items = raw_data.get('items', []) if isinstance(raw_data, dict) else raw_data
-        
-        cleaned_tasks = []
-        for item in items:
-            task = {
-                'id': f"JIRA-{item.get('id', '')}",
-                'title': item.get('title', '').strip(),
-                'description': item.get('body', '').strip(),
-                'source': 'jira',
-                'status': item.get('status', 'unknown').lower(),
-                'priority': self._normalize_priority(item.get('severity', 'medium')),
-                'severity': self._calculate_severity(item.get('severity', 'medium')),
-                'assignee': item.get('owner', '').strip(),
-                'deadline': self._normalize_date(item.get('due')),
-                'created_at': datetime.now().isoformat(),
-                'labels': [],
-                'dependencies': item.get('dependencies', []),
-                'story_points': 0,
-                'impact': item.get('impact', 5),
-                'team': item.get('team', ''),
-                'execution': item.get('execution', {}),
-                'raw_data': item
-            }
-            
-            # Validate required fields
-            if task['title'] and task['id']:
-                cleaned_tasks.append(task)
-        
-        print(f"✅ Cleaned {len(cleaned_tasks)} Jira tasks")
-        return cleaned_tasks
-    
-    def clean_servicenow_defects(self, filepath: str) -> List[Dict[str, Any]]:
-        """Clean and normalize ServiceNow defect data"""
-        print("🧹 Cleaning ServiceNow Defects...")
-        
-        with open(filepath, 'r') as f:
-            raw_data = json.load(f)
-        
-        # Handle nested structure
-        items = raw_data.get('items', []) if isinstance(raw_data, dict) else raw_data
-        
-        cleaned_tasks = []
-        for item in items:
-            task = {
-                'id': f"DEFECT-{item.get('id', '')}",
-                'title': item.get('title', '').strip(),
-                'description': item.get('body', '').strip(),
-                'source': 'servicenow',
-                'status': item.get('status', 'open').lower(),
-                'priority': self._normalize_priority(item.get('severity', 'medium')),
-                'severity': self._calculate_severity(item.get('severity', 'medium')),
-                'assignee': item.get('owner', '').strip(),
-                'deadline': self._normalize_date(item.get('due')) or self._calculate_sla_deadline(item.get('severity', 'medium')),
-                'created_at': datetime.now().isoformat(),
-                'category': '',
-                'impact': item.get('impact', 5),
-                'sla_remaining': None,
-                'team': item.get('team', ''),
-                'raw_data': item
-            }
-            
-            if task['title'] and task['id']:
-                cleaned_tasks.append(task)
-        
-        print(f"✅ Cleaned {len(cleaned_tasks)} ServiceNow defects")
-        return cleaned_tasks
-    
-    def clean_outlook_emails(self, filepath: str) -> List[Dict[str, Any]]:
-        """Extract action items from email data"""
-        print("🧹 Cleaning Outlook Emails and extracting action items...")
-        
-        with open(filepath, 'r') as f:
-            raw_data = json.load(f)
-        
-        # Handle nested structure
-        items = raw_data.get('items', []) if isinstance(raw_data, dict) else raw_data
-        
-        cleaned_tasks = []
-        for idx, email in enumerate(items):
-            # Check if email contains action items
-            if self._contains_action_item({'subject': email.get('title', ''), 'body': email.get('body', '')}):
-                task = {
-                    'id': f"EMAIL-{idx+1}",
-                    'title': email.get('title', '').strip() or self._extract_action_title({'subject': email.get('title', ''), 'body': email.get('body', '')}),
-                    'description': email.get('body', '').strip()[:500],  # First 500 chars
-                    'source': 'email',
-                    'status': 'pending',
-                    'priority': self._infer_priority_from_email({'subject': email.get('title', ''), 'body': email.get('body', '')}),
-                    'severity': self._infer_severity_from_email({'subject': email.get('title', ''), 'body': email.get('body', '')}),
-                    'assignee': email.get('owner', '') or '',
-                    'deadline': self._extract_deadline_from_text(email.get('body', '')),
-                    'created_at': datetime.now().isoformat(),
-                    'sender': email.get('from', ''),
-                    'subject': email.get('title', ''),
-                    'impact': email.get('impact', 5),
-                    'raw_data': email
-                }
-                
-                if task['title']:
-                    cleaned_tasks.append(task)
-        
-        print(f"✅ Extracted {len(cleaned_tasks)} action items from emails")
-        return cleaned_tasks
-    
-    def clean_slack_mentions(self, filepath: str) -> List[Dict[str, Any]]:
-        """Extract action items from Slack mentions"""
-        print("🧹 Cleaning Slack Mentions...")
-        
-        with open(filepath, 'r') as f:
-            raw_data = json.load(f)
-        
-        # Handle nested structure
-        items = raw_data.get('items', []) if isinstance(raw_data, dict) else raw_data
-        
-        cleaned_tasks = []
-        for idx, message in enumerate(items):
-            text = message.get('body', '') or message.get('title', '')
-            if self._contains_action_item({'body': text}):
-                task = {
-                    'id': f"SLACK-{idx+1}",
-                    'title': message.get('title', '').strip() or text.strip()[:100],
-                    'description': text.strip(),
-                    'source': 'slack',
-                    'status': 'pending',
-                    'priority': 'medium',
-                    'severity': 3,
-                    'assignee': message.get('owner', ''),
-                    'deadline': None,
-                    'created_at': datetime.now().isoformat(),
-                    'channel': message.get('from', ''),
-                    'impact': message.get('impact', 5),
-                    'raw_data': message
-                }
-                
-                if task['title']:
-                    cleaned_tasks.append(task)
-        
-        print(f"✅ Extracted {len(cleaned_tasks)} action items from Slack")
-        return cleaned_tasks
-    
-    def clean_meeting_notes(self, filepath: str) -> List[Dict[str, Any]]:
-        """Extract action items from meeting notes"""
-        print("🧹 Cleaning Meeting Notes...")
-        
-        with open(filepath, 'r') as f:
-            raw_data = json.load(f)
-        
-        # Handle nested structure
-        items = raw_data.get('items', []) if isinstance(raw_data, dict) else raw_data
-        
-        cleaned_tasks = []
-        for idx, meeting in enumerate(items):
-            # Extract action items from meeting
-            notes = meeting.get('body', '') or meeting.get('title', '')
-            action_items = self._extract_meeting_action_items(notes)
-            
-            for action_idx, action in enumerate(action_items):
-                task = {
-                    'id': f"MEETING-{idx+1}-{action_idx+1}",
-                    'title': action.get('title', '').strip(),
-                    'description': action.get('description', '').strip(),
-                    'source': 'meeting',
-                    'status': 'pending',
-                    'priority': 'medium',
-                    'severity': 3,
-                    'assignee': action.get('assignee', '') or meeting.get('owner', ''),
-                    'deadline': action.get('deadline'),
-                    'created_at': datetime.now().isoformat(),
-                    'meeting_title': meeting.get('title', ''),
-                    'impact': meeting.get('impact', 5),
-                    'raw_data': meeting
-                }
-                
-                if task['title']:
-                    cleaned_tasks.append(task)
-        
-        print(f"✅ Extracted {len(cleaned_tasks)} action items from meetings")
-        return cleaned_tasks
-    
-    def clean_github_work(self, filepath: str) -> List[Dict[str, Any]]:
-        """Clean GitHub PR and issue data"""
-        print("🧹 Cleaning GitHub Work...")
-        
-        with open(filepath, 'r') as f:
-            raw_data = json.load(f)
-        
-        # Handle nested structure
-        items = raw_data.get('items', []) if isinstance(raw_data, dict) else raw_data
-        
-        cleaned_tasks = []
-        for item in items:
-            task = {
-                'id': f"GITHUB-{item.get('id', '')}",
-                'title': item.get('title', '').strip(),
-                'description': item.get('body', '').strip(),
-                'source': 'github',
-                'status': item.get('status', 'open').lower(),
-                'priority': self._normalize_priority(item.get('severity', 'medium')),
-                'severity': self._calculate_severity(item.get('severity', 'medium')),
-                'assignee': item.get('owner', '').strip(),
-                'deadline': self._normalize_date(item.get('due')),
-                'created_at': datetime.now().isoformat(),
-                'labels': [],
-                'pr_or_issue': 'issue',
-                'team': item.get('team', ''),
-                'impact': item.get('impact', 5),
-                'raw_data': item
-            }
-            
-            if task['title'] and task['id']:
-                cleaned_tasks.append(task)
-        
-        print(f"✅ Cleaned {len(cleaned_tasks)} GitHub items")
-        return cleaned_tasks
-    
-    # Helper methods
-    
-    def _normalize_priority(self, priority: str) -> str:
-        """Normalize priority to standard values"""
-        priority = str(priority).lower()
-        if priority in ['p0', 'critical', 'highest', '1']:
-            return 'critical'
-        elif priority in ['p1', 'high', '2']:
-            return 'high'
-        elif priority in ['p2', 'medium', 'normal', '3']:
-            return 'medium'
-        elif priority in ['p3', 'low', 'lowest', '4']:
-            return 'low'
-        return 'medium'
-    
-    def _calculate_severity(self, priority: str, severity: str = None) -> int:
-        """Calculate numeric severity (1-5, 5 being most severe)"""
-        priority = self._normalize_priority(priority)
-        severity_map = {
-            'critical': 5,
-            'high': 4,
-            'medium': 3,
-            'low': 2
-        }
-        return severity_map.get(priority, 3)
-    
-    def _normalize_date(self, date_str: Any) -> str:
-        """Normalize date to ISO format"""
-        if not date_str:
-            return None
-        
-        try:
-            if isinstance(date_str, (int, float)):
-                # Unix timestamp
-                dt = datetime.fromtimestamp(date_str)
-            else:
-                # Try parsing string
-                dt = datetime.fromisoformat(str(date_str).replace('Z', '+00:00'))
-            return dt.isoformat()
-        except:
-            return None
-    
-    def _calculate_sla_deadline(self, priority: str) -> str:
-        """Calculate SLA deadline based on priority"""
-        from datetime import timedelta
-        
-        priority = self._normalize_priority(priority)
-        hours_map = {
-            'critical': 4,
-            'high': 24,
-            'medium': 72,
-            'low': 168
-        }
-        
-        hours = hours_map.get(priority, 72)
-        deadline = datetime.now() + timedelta(hours=hours)
-        return deadline.isoformat()
-    
-    def _contains_action_item(self, email: Dict) -> bool:
-        """Check if email/message contains action items"""
-        action_keywords = [
-            'please', 'can you', 'could you', 'need you to', 'action required',
-            'todo', 'to-do', 'task', 'deadline', 'urgent', 'asap', 'follow up',
-            'complete', 'finish', 'deliver', 'submit', 'review', 'approve'
-        ]
-        
-        text = (email.get('subject', '') + ' ' + email.get('body', '')).lower()
-        return any(keyword in text for keyword in action_keywords)
-    
-    def _extract_action_title(self, email: Dict) -> str:
-        """Extract action item title from email"""
-        subject = email.get('subject', '')
-        body = email.get('body', '')
-        
-        # Use subject if it exists
-        if subject and len(subject.strip()) > 10:
-            return subject.strip()[:100]
-        
-        # Extract first sentence from body
-        sentences = body.split('.')
-        if sentences:
-            return sentences[0].strip()[:100]
-        
-        return 'Action Item from Email'
-    
-    def _infer_priority_from_email(self, email: Dict) -> str:
-        """Infer priority from email content"""
-        text = (email.get('subject', '') + ' ' + email.get('body', '')).lower()
-        
-        if any(word in text for word in ['urgent', 'critical', 'asap', 'immediately']):
-            return 'high'
-        elif any(word in text for word in ['important', 'priority']):
-            return 'medium'
-        return 'medium'
-    
-    def _infer_severity_from_email(self, email: Dict) -> int:
-        """Infer severity from email content"""
-        priority = self._infer_priority_from_email(email)
-        return self._calculate_severity(priority)
-    
-    def _extract_deadline_from_text(self, text: str) -> str:
-        """Extract deadline from text (basic implementation)"""
-        # This is a simplified version - in production, use NLP
-        deadline_keywords = ['by', 'before', 'deadline', 'due']
-        # For now, return None - will be enhanced by LLM
-        return None
-    
-    def _extract_meeting_action_items(self, notes: str) -> List[Dict]:
-        """Extract action items from meeting notes"""
-        # Basic extraction - looks for common patterns
-        action_items = []
-        
-        lines = notes.split('\n')
-        for line in lines:
-            line = line.strip()
-            if any(marker in line.lower() for marker in ['action:', '- [ ]', 'todo:', 'task:']):
-                action_items.append({
-                    'title': line,
-                    'description': line,
-                    'assignee': '',
-                    'deadline': None
-                })
-        
-        return action_items
-    
-    def run_cleaning(self) -> Dict[str, List[Dict]]:
-        """Run cleaning on all datasets"""
-        print("\n" + "="*60)
-        print("🚀 TaskPilot AI Dataset Cleaning")
-        print("="*60 + "\n")
-        
-        results = {}
-        
-        # Clean each dataset
-        dataset_files = {
-            'jira': 'jira_sprint_board.json',
-            'defects': 'servicenow_defects.json',
-            'emails': 'outlook_emails.json',
-            'slack': 'slack_mentions.json',
-            'meetings': 'meeting_notes.json',
-            'github': 'github_work.json'
-        }
-        
-        for source, filename in dataset_files.items():
-            filepath = os.path.join(self.dataset_dir, filename)
-            
-            if not os.path.exists(filepath):
-                print(f"⚠️  {filename} not found, skipping...")
-                continue
-            
-            try:
-                if source == 'jira':
-                    results[source] = self.clean_jira_sprint_board(filepath)
-                elif source == 'defects':
-                    results[source] = self.clean_servicenow_defects(filepath)
-                elif source == 'emails':
-                    results[source] = self.clean_outlook_emails(filepath)
-                elif source == 'slack':
-                    results[source] = self.clean_slack_mentions(filepath)
-                elif source == 'meetings':
-                    results[source] = self.clean_meeting_notes(filepath)
-                elif source == 'github':
-                    results[source] = self.clean_github_work(filepath)
-            except Exception as e:
-                print(f"❌ Error cleaning {source}: {e}")
-                results[source] = []
-        
-        # Save cleaned data
-        output_file = os.path.join(self.dataset_dir, 'cleaned_tasks.json')
-        with open(output_file, 'w') as f:
-            json.dump(results, f, indent=2)
-        
-        print("\n" + "="*60)
-        print("✅ Dataset Cleaning Complete!")
-        print(f"📊 Total tasks across all sources:")
-        for source, tasks in results.items():
-            print(f"   - {source}: {len(tasks)} tasks")
-        print(f"\n💾 Cleaned data saved to: {output_file}")
-        print("="*60 + "\n")
-        
-        return results
+warnings.filterwarnings("ignore")
 
+DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "datasets"
 
-if __name__ == '__main__':
-    cleaner = DatasetCleaner()
-    cleaner.run_cleaning()
+# ─── Step 1: Multi-Source Data Ingestion ─────────────────────────────────────
+
+def load_json_df(path):
+    """Load a JSON file that may have { items: [...] } or be a raw array."""
+    with open(path) as f:
+        raw = json.load(f)
+    if isinstance(raw, dict) and "items" in raw:
+        return pd.DataFrame(raw["items"])
+    elif isinstance(raw, list):
+        return pd.DataFrame(raw)
+    else:
+        return pd.DataFrame([raw])
+
+print("\n" + "="*60)
+print("🚀 TaskPilot AI — NLP Data Pipeline")
+print("="*60 + "\n")
+
+print("[1/12] Loading source datasets...")
+github     = load_json_df(DATA_DIR / "github_work.json")
+jira       = load_json_df(DATA_DIR / "jira_sprint_board.json")
+slack      = load_json_df(DATA_DIR / "slack_mentions.json")
+servicenow = load_json_df(DATA_DIR / "servicenow_defects.json")
+calendar   = load_json_df(DATA_DIR / "calendar_blocks.json")
+try:
+    emails = load_json_df(DATA_DIR / "outlook_emails.json")
+except Exception:
+    emails = pd.DataFrame()
+try:
+    meetings = load_json_df(DATA_DIR / "meeting_notes.json")
+except Exception:
+    meetings = pd.DataFrame()
+
+print(f"   Loaded: github={len(github)}, jira={len(jira)}, slack={len(slack)}, servicenow={len(servicenow)}")
+
+# ─── Step 2: Standardize Schema ──────────────────────────────────────────────
+
+COMMON_COLUMNS = ["source", "task_id", "title", "description", "owner",
+                  "team", "severity", "status", "due_date"]
+
+def standardize(df, source):
+    if df is None or df.empty:
+        return pd.DataFrame(columns=COMMON_COLUMNS)
+    col_map = {"id": "task_id", "body": "description", "due": "due_date"}
+    df = df.rename(columns=col_map)
+    for col in COMMON_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    df["source"] = source
+    # Ensure task_id is string
+    if "task_id" in df.columns:
+        df["task_id"] = df["task_id"].astype(str)
+    return df[COMMON_COLUMNS]
+
+print("[2/12] Standardizing schemas...")
+github_std     = standardize(github.copy(),     "github")
+jira_std       = standardize(jira.copy(),       "jira")
+slack_std      = standardize(slack.copy(),      "slack")
+servicenow_std = standardize(servicenow.copy(), "servicenow")
+emails_std     = standardize(emails.copy(),     "email") if not emails.empty else pd.DataFrame(columns=COMMON_COLUMNS)
+
+tasks = pd.concat([github_std, jira_std, slack_std, servicenow_std, emails_std],
+                  ignore_index=True)
+
+# ─── Step 3: Data Cleaning ────────────────────────────────────────────────────
+
+print("[3/12] Cleaning data...")
+tasks = tasks.drop_duplicates()
+tasks = tasks.drop_duplicates(subset=["task_id"])
+tasks["owner"]    = tasks["owner"].fillna("Unassigned")
+tasks["severity"] = tasks["severity"].fillna("P3").astype(str).str.upper()
+
+severity_map = {
+    "CRITICAL": "P1", "SEV-1": "P1", "SEV-2": "P2", "SEV-3": "P3",
+    "HIGH": "P1", "MEDIUM": "P2", "LOW": "P3", "1": "P1", "2": "P2", "3": "P3"
+}
+tasks["severity"] = tasks["severity"].replace(severity_map)
+
+# Normalize to P1-P4
+def normalize_severity(s):
+    s = str(s).upper()
+    if s in ("P1", "CRITICAL", "SEV-1"): return "P1"
+    if s in ("P2", "HIGH", "SEV-2"):     return "P2"
+    if s in ("P3", "MEDIUM", "SEV-3"):   return "P3"
+    return "P4"
+
+tasks["severity"] = tasks["severity"].apply(normalize_severity)
+tasks["due_date"] = pd.to_datetime(tasks["due_date"], errors="coerce")
+tasks["title"]       = tasks["title"].fillna("").astype(str).str.strip()
+tasks["description"] = tasks["description"].fillna("").astype(str).str.strip()
+
+# ─── Step 4: Text Preprocessing ──────────────────────────────────────────────
+
+print("[4/12] Running NLP text preprocessing (spaCy)...")
+try:
+    import spacy
+    nlp = spacy.load("en_core_web_sm")
+    SPACY_OK = True
+except Exception as e:
+    print(f"   ⚠ spaCy unavailable ({e}), using simple tokenizer")
+    SPACY_OK = False
+
+def preprocess(text):
+    if not text or pd.isna(text):
+        return ""
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s-]", " ", text)
+    if SPACY_OK:
+        doc = nlp(text)
+        tokens = [tok.lemma_ for tok in doc if not tok.is_stop and not tok.is_punct and len(tok.lemma_) > 1]
+    else:
+        tokens = [w for w in text.split() if len(w) > 2]
+    return " ".join(tokens)
+
+tasks["clean_text"] = (
+    tasks["title"].fillna("") + " " + tasks["description"].fillna("")
+).apply(preprocess)
+
+# ─── Step 5: NLP Entity Extraction ───────────────────────────────────────────
+
+print("[5/12] Extracting entities (people, dates, issue IDs)...")
+try:
+    import dateparser
+    DATEPARSER_OK = True
+except ImportError:
+    DATEPARSER_OK = False
+
+def extract_entities(text):
+    entities = {"people": [], "dates": [], "issue_ids": []}
+    if not text or not SPACY_OK:
+        return entities
+    doc = nlp(str(text))
+    for ent in doc.ents:
+        if ent.label_ == "PERSON":
+            entities["people"].append(ent.text)
+        elif ent.label_ == "DATE" and DATEPARSER_OK:
+            parsed = dateparser.parse(ent.text)
+            if parsed:
+                entities["dates"].append(parsed.date().isoformat())
+    ids = re.findall(r"(INC-\d+|JIRA-\d+|PR-\d+|GH-\d+|SLACK-\d+)", str(text), re.IGNORECASE)
+    entities["issue_ids"] = ids
+    return entities
+
+tasks["entities"] = tasks["description"].fillna("").apply(extract_entities)
+
+# ─── Step 6: Hidden Task Detection ───────────────────────────────────────────
+
+print("[6/12] Detecting hidden tasks from unstructured signals...")
+URGENT_WORDS = ["urgent", "asap", "blocked", "critical", "immediately", "sla", "escalation",
+                "please", "action required", "deadline", "review", "approve"]
+
+def detect_hidden_task(text):
+    text = str(text).lower()
+    return any(word in text for word in URGENT_WORDS)
+
+tasks["hidden_task_signal"] = tasks["description"].fillna("").apply(detect_hidden_task)
+print(f"   Found {tasks['hidden_task_signal'].sum()} hidden task signals")
+
+# ─── Step 7: Semantic Deduplication ──────────────────────────────────────────
+
+print("[7/12] Running semantic deduplication with sentence-transformers...")
+duplicates_df = pd.DataFrame(columns=["task_1", "task_2", "score"])
+
+try:
+    from sentence_transformers import SentenceTransformer
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    texts = tasks["clean_text"].tolist()
+    if texts:
+        embeddings = model.encode(texts, show_progress_bar=False)
+        similarity = cosine_similarity(embeddings)
+
+        THRESHOLD = 0.85
+        duplicates = []
+        n = len(tasks)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if similarity[i][j] >= THRESHOLD:
+                    duplicates.append({
+                        "task_1": tasks.iloc[i]["task_id"],
+                        "task_2": tasks.iloc[j]["task_id"],
+                        "score":  round(float(similarity[i][j]), 3)
+                    })
+        duplicates_df = pd.DataFrame(duplicates)
+        print(f"   Found {len(duplicates_df)} duplicate pairs (threshold={THRESHOLD})")
+    else:
+        print("   No tasks to deduplicate")
+except Exception as e:
+    print(f"   ⚠ Sentence-transformers unavailable ({e}), skipping semantic dedup")
+
+# ─── Step 8: Dependency Graph ─────────────────────────────────────────────────
+
+print("[8/12] Building dependency graph with networkx...")
+try:
+    import networkx as nx
+    graph = nx.Graph()
+    for _, row in tasks.iterrows():
+        graph.add_node(row["task_id"], owner=row["owner"], severity=row["severity"])
+    for _, row in duplicates_df.iterrows():
+        graph.add_edge(row["task_1"], row["task_2"], weight=row["score"])
+    print(f"   Graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
+except Exception as e:
+    print(f"   ⚠ networkx unavailable ({e}), skipping graph")
+
+# ─── Step 9: Feature Engineering ─────────────────────────────────────────────
+
+print("[9/12] Engineering priority features...")
+today = pd.Timestamp.today()
+
+severity_score_map = {"P1": 10, "P2": 7, "P3": 4, "P4": 1}
+tasks["severity_score"] = tasks["severity"].map(severity_score_map).fillna(1)
+
+tasks["days_to_due"] = (tasks["due_date"] - today).dt.days
+tasks["days_to_due"] = tasks["days_to_due"].fillna(30).clip(-30, 90)
+
+tasks["workload_score"] = tasks.groupby("owner")["task_id"].transform("count")
+tasks["urgency_score"]  = tasks["hidden_task_signal"].astype(int)
+
+# ─── Step 10: Priority Scoring ────────────────────────────────────────────────
+
+print("[10/12] Computing priority scores...")
+tasks["priority_score"] = (
+    tasks["severity_score"] * 0.40 +
+    (30 - tasks["days_to_due"]).clip(0, 30) * 0.30 +
+    tasks["workload_score"] * 0.20 +
+    tasks["urgency_score"] * 10 * 0.10
+).round(2)
+
+tasks = tasks.sort_values("priority_score", ascending=False).reset_index(drop=True)
+
+# ─── Step 11: Daily Plan Generation ──────────────────────────────────────────
+
+print("[11/12] Generating top-5 daily plan...")
+top_tasks = tasks.head(5)
+print("\n  === TODAY'S PRIORITY PLAN ===")
+for _, row in top_tasks.iterrows():
+    print(f"\n  Task:     {row['title']}")
+    print(f"  Owner:    {row['owner']}")
+    print(f"  Score:    {row['priority_score']}")
+    print(f"  Severity: {row['severity']}")
+    print(f"  Due:      {row['due_date']}")
+    print(f"  Source:   {row['source']}")
+print()
+
+# ─── Step 12: Query Helpers ────────────────────────────────────────────────────
+
+def top_priority():
+    task = tasks.iloc[0]
+    return {"title": task["title"], "owner": task["owner"], "priority_score": task["priority_score"]}
+
+def blocked_tasks():
+    return tasks[tasks["clean_text"].str.contains("blocked", case=False, na=False)][["task_id", "title"]]
+
+def overloaded_engineers():
+    return tasks.groupby("owner").size().sort_values(ascending=False)
+
+# ─── Save Final Datasets ──────────────────────────────────────────────────────
+
+print("[12/12] Saving processed datasets...")
+
+# Convert entities column to JSON-serializable dict
+tasks_out = tasks.copy()
+tasks_out["entities"]     = tasks_out["entities"].apply(lambda x: x if isinstance(x, dict) else {})
+tasks_out["due_date"]     = tasks_out["due_date"].astype(str).replace("NaT", None)
+
+# Group by source for cleaned_tasks.json (matches agentOrchestrator.mjs expectations)
+cleaned = {}
+for src in tasks_out["source"].unique():
+    subset = tasks_out[tasks_out["source"] == src].copy()
+    # Rename columns back to what the Node.js orchestrator expects
+    subset = subset.rename(columns={
+        "task_id":       "id",
+        "description":  "body",
+        "due_date":     "due",
+        "workload_score":"workload"
+    })
+    cleaned[src] = json.loads(subset.to_json(orient="records"))
+
+output_file = DATA_DIR / "cleaned_tasks.json"
+with open(output_file, "w") as f:
+    json.dump(cleaned, f, indent=2, default=str)
+
+# Also save full processed data for reference
+full_output = DATA_DIR / "taskpilot_processed.json"
+with open(full_output, "w") as f:
+    json.dump(json.loads(tasks_out.to_json(orient="records")), f, indent=2, default=str)
+
+# Save duplicates
+dup_output = DATA_DIR / "duplicate_tasks.json"
+with open(dup_output, "w") as f:
+    json.dump(json.loads(duplicates_df.to_json(orient="records")), f, indent=2, default=str)
+
+print("\n" + "="*60)
+print("✅ Pipeline Complete!")
+print(f"   Total tasks processed: {len(tasks)}")
+for src, rows in cleaned.items():
+    print(f"   - {src}: {len(rows)} tasks")
+print(f"\n   Saved:")
+print(f"   → {output_file}")
+print(f"   → {full_output}")
+print(f"   → {dup_output}")
+print("="*60 + "\n")
+
+# Quick diagnostics
+print("📊 Top priority:", top_priority())
+print("🚧 Blocked tasks:\n", blocked_tasks().to_string() if not blocked_tasks().empty else "  None")
+print("👥 Overloaded engineers:\n", overloaded_engineers().to_string())
