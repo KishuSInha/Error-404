@@ -2919,60 +2919,52 @@ function renderUnifiedInbox() {
   }
 
   // ─── OVERVIEW ALL SOURCES GRID VIEW ───
-  // Compute tile data for each source (All white/cream tiles matching the theme)
+  // Pull from full prioritized list (not just today's 12-item queue) so cards are always full.
+  // Auto-fill: if today's queue has < 8 tasks for a source, top up from state.prioritized.
+  const MAX_PER_CARD = 8;
+
   const tiles = sources.map(src => {
-    const pending = queue.filter(t => taskMatchesSource(t, src.id));
     const meta = SOURCE_META[src.id] || { label: src.name, icon: "◎", color: src.color || "#64748b", emoji: "📌" };
 
-    const dueDates = pending.map(t => t.due).filter(Boolean).sort();
-    const nearestDue = dueDates[0] || null;
-    const daysLeft = nearestDue
-      ? Math.ceil((new Date(nearestDue) - new Date(TODAY)) / 86400000)
-      : null;
+    // Today's queue tasks for this source
+    const todayPending = queue.filter(t => taskMatchesSource(t, src.id));
 
-    // Pastel card backgrounds — brand color only for border/accent, never the full card fill
-    let tileBg    = "#ffffff";
-    let tileBorder = `${meta.color}40`;   // 25% opacity border always
-    let textColor  = "#17202a";
-    let subTextColor = "#65717d";
-    let isDarkCard = false;
-    // pastel tint from meta, fallback to white
-    const pastelBg = meta.pastel || "#f8f9fa";
+    // Auto-fill: add more from full prioritized list (not in today's queue, not completed)
+    const todayIds = new Set(todayPending.map(t => t.id));
+    const fillPool = state.prioritized.filter(t =>
+      taskMatchesSource(t, src.id) &&
+      !isTaskCompleted(t.id) &&
+      !todayIds.has(t.id)
+    );
+    // Merge: today's tasks first, then fill up to MAX_PER_CARD
+    const allPending = [...todayPending, ...fillPool].slice(0, MAX_PER_CARD);
 
-    if (daysLeft !== null) {
-      if (daysLeft <= 0) {
-        // Due today: pastel tint of source colour + solid coloured left border
-        tileBg    = pastelBg;
-        tileBorder = meta.color;
-        textColor  = "#17202a";
-        subTextColor = "#44546f";
-        isDarkCard = false;
-      } else if (daysLeft <= 3) {
-        // Approaching: slightly tinted white + dashed border
-        tileBg    = pastelBg + "cc";
-        tileBorder = `${meta.color}80`;
-        textColor  = "#17202a";
-        subTextColor = "#44546f";
-        isDarkCard = false;
-      }
+    // Count all non-completed tasks for this source (for stats)
+    const allSourceTasks = state.prioritized.filter(t =>
+      taskMatchesSource(t, src.id) && !isTaskCompleted(t.id)
+    );
+
+    // Determine card colour based on MOST URGENT task, not earliest date
+    // Red = any task overdue or P1 due today
+    // Amber = any task due within 3 days
+    // Cream = all tasks stable
+    let cardUrgency = "cream"; // default
+    for (const t of allPending) {
+      if (!t.due) continue;
+      const dl = Math.ceil((new Date(t.due) - new Date(TODAY)) / 86400000);
+      if (dl <= 0 || t.severity === "P1") { cardUrgency = "red"; break; }
+      if (dl <= 3 && cardUrgency !== "red") cardUrgency = "amber";
     }
+    // Also check P1 tasks with no due date
+    if (allPending.some(t => t.severity === "P1")) cardUrgency = "red";
 
-    let urgencyText = null;
-    if (daysLeft !== null) {
-      if (daysLeft <= 0) {
-        urgencyText = "DUE TODAY";
-      } else if (daysLeft <= 3) {
-        urgencyText = daysLeft === 1 ? "TOMORROW" : `${daysLeft}d left`;
-      }
-    }
+    const p1Count = allSourceTasks.filter(t => t.severity === "P1").length;
 
-    const p1Count = pending.filter(t => t.severity === "P1").length;
-    const topTasks = pending.slice(0, 5);
-
-    return { src, meta, pending, nearestDue, daysLeft, tileBg, tileBorder, textColor, subTextColor, urgencyText, p1Count, topTasks, isDarkCard };
+    return { src, meta, pending: allSourceTasks, topTasks: allPending, cardUrgency, p1Count };
   });
 
   const totalPending = tiles.reduce((s, t) => s + t.pending.length, 0);
+
   const totalP1     = tiles.reduce((s, t) => s + t.p1Count, 0);
 
   function renderTaskRow(t, parentDark = false) {
@@ -3113,31 +3105,54 @@ function renderUnifiedInbox() {
     notes:      { icon:"📌", bg:"#d1fae5", color:"#065f46" }
   };
 
+  // ── 3-colour palette (card-level and task-row-level) ──────────────────────
+  const CARD_PAL = {
+    red:   { bg:"#fdecea", border:"#e8a09a", accent:"#c0392b", label:"#922b21", divider:"rgba(200,80,60,0.15)" },
+    amber: { bg:"#fef6e4", border:"#f0c080", accent:"#b7600a", label:"#935005", divider:"rgba(200,140,40,0.15)" },
+    cream: { bg:"#fdf8f0", border:"#d9c8ae", accent:"#7a5c3a", label:"#5d4226", divider:"rgba(180,150,100,0.18)" }
+  };
+
   const tileGrid = tiles.map(tile => {
-    const { src, meta, pending, daysLeft, p1Count, topTasks } = tile;
+    const { src, meta, pending, topTasks, cardUrgency, p1Count } = tile;
+    const pal  = CARD_PAL[cardUrgency];
+    const logo = SOURCE_LOGO_MAP[src.id];
 
-    const isOverdue     = daysLeft !== null && daysLeft <= 0;
-    const isApproaching = daysLeft !== null && daysLeft > 0 && daysLeft <= 3;
-    const pal = isOverdue ? PALETTE.red : isApproaching ? PALETTE.amber : PALETTE.cream;
-    const ss  = SOURCE_STYLE[src.id] || { icon:"◎", bg:"#f8fafc", color:"#64748b" };
-    const logo = SOURCE_LOGOS[src.id];
-
-    const urgencyBadge = isOverdue
+    // Card-level badge
+    const cardBadge = cardUrgency === "red"
       ? `<span style="font-size:10px;font-weight:800;padding:3px 10px;border-radius:999px;background:#fdecea;color:#c0392b;border:1px solid #e8a09a;white-space:nowrap;">● Due Today</span>`
-      : isApproaching
-        ? `<span style="font-size:10px;font-weight:800;padding:3px 10px;border-radius:999px;background:#fef6e4;color:#b7600a;border:1px solid #f0c080;white-space:nowrap;">◐ ${daysLeft === 1 ? "Tomorrow" : daysLeft + "d left"}</span>`
+      : cardUrgency === "amber"
+        ? `<span style="font-size:10px;font-weight:800;padding:3px 10px;border-radius:999px;background:#fef6e4;color:#b7600a;border:1px solid #f0c080;white-space:nowrap;">◐ Approaching</span>`
         : "";
 
     const p1Badge = p1Count > 0
       ? `<span style="font-size:10px;font-weight:800;padding:3px 9px;border-radius:999px;background:#fdecea;color:#c0392b;border:1px solid #e8a09a;white-space:nowrap;">⚡ ${p1Count} P1</span>`
       : "";
 
+    // Per-task urgency → row colour
+    function rowUrgency(t) {
+      if (isTaskCompleted(t.id)) return "cream";
+      if (t.severity === "P1") return "red";
+      if (!t.due) return t.severity === "P2" ? "amber" : "cream";
+      const dl = Math.ceil((new Date(t.due) - new Date(TODAY)) / 86400000);
+      if (dl <= 0) return "red";
+      if (dl <= 3 || t.severity === "P2") return "amber";
+      return "cream";
+    }
+
+    const ROW_BG  = { red:"#fdecea",   amber:"#fef6e4",   cream:"rgba(255,255,255,0.6)" };
+    const ROW_BDR = { red:"#e8a09a",   amber:"#f0c080",   cream:"rgba(180,140,90,0.22)" };
+    const DUE_CLR = { red:"#c0392b",   amber:"#b7600a",   cream:"#8a6a3a" };
+    const SEV_BG  = { P1:"#fdecea", P2:"#fef6e4", P3:"#d1fae5", P4:"#f1f5f9" };
+    const SEV_CLR = { P1:"#c0392b", P2:"#b7600a", P3:"#065f46", P4:"#64748b" };
+    const MAX_SHOW = 8;
+    const autoFillCount = Math.max(0, topTasks.length - queue.filter(t => taskMatchesSource(t, src.id)).length);
+
     return `
       <div style="background:${pal.bg};border:1.5px solid ${pal.border};border-radius:14px;overflow:hidden;
-                  box-shadow:0 2px 10px rgba(100,60,20,0.08),0 1px 2px rgba(100,60,20,0.04);
+                  box-shadow:0 2px 10px rgba(100,60,20,0.07),0 1px 2px rgba(100,60,20,0.04);
                   cursor:pointer;transition:box-shadow 0.18s,transform 0.18s;"
-           onmouseover="this.style.boxShadow='0 8px 24px rgba(100,60,20,0.14)';this.style.transform='translateY(-2px)'"
-           onmouseout="this.style.boxShadow='0 2px 10px rgba(100,60,20,0.08)';this.style.transform='none'"
+           onmouseover="this.style.boxShadow='0 8px 24px rgba(100,60,20,0.13)';this.style.transform='translateY(-2px)'"
+           onmouseout="this.style.boxShadow='0 2px 10px rgba(100,60,20,0.07)';this.style.transform='none'"
            data-scrum-source="${src.id}">
 
         <!-- Header -->
@@ -3145,19 +3160,21 @@ function renderUnifiedInbox() {
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
             <div style="display:flex;align-items:center;gap:10px;min-width:0;">
               <div style="width:36px;height:36px;border-radius:9px;flex-shrink:0;
-                          background:${logo ? logo.bg : ss.bg};
+                          background:${logo ? logo.bg : "#f1f5f9"};
                           display:flex;align-items:center;justify-content:center;
                           box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-                ${logo ? logo.svg : `<span style="font-size:18px;">${ss.icon}</span>`}
+                ${logo ? logo.svg : `<span style="font-size:18px;">${meta.emoji}</span>`}
               </div>
               <div style="min-width:0;">
                 <div style="font-size:13px;font-weight:800;color:#2d1505;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(meta.label)}</div>
-                <div style="font-size:11px;color:${pal.label};margin-top:1px;font-weight:600;">${pending.length} task${pending.length!==1?"s":""} pending</div>
+                <div style="font-size:11px;color:${pal.label};margin-top:1px;font-weight:600;">
+                  ${pending.length} task${pending.length!==1?"s":""} pending
+                  ${autoFillCount > 0 ? `<span style="font-size:9px;opacity:0.7;margin-left:4px;">(+${autoFillCount} auto-filled)</span>` : ""}
+                </div>
               </div>
             </div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;">
-              ${urgencyBadge}
-              ${p1Badge}
+              ${cardBadge}${p1Badge}
             </div>
           </div>
         </div>
@@ -3165,7 +3182,7 @@ function renderUnifiedInbox() {
         <!-- Divider -->
         <div style="height:1.5px;background:${pal.divider};margin:0 12px;"></div>
 
-        <!-- Stats row -->
+        <!-- Stats -->
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;padding:0 4px;">
           <div style="padding:10px 8px;text-align:center;border-right:1.5px solid ${pal.divider};">
             <div style="font-size:26px;font-weight:900;color:${pal.accent};line-height:1;">${pending.length}</div>
@@ -3176,46 +3193,45 @@ function renderUnifiedInbox() {
             <div style="font-size:9px;font-weight:700;color:${pal.label};letter-spacing:0.07em;margin-top:3px;opacity:0.75;text-transform:uppercase;">P1 Urgent</div>
           </div>
           <div style="padding:10px 8px;text-align:center;">
-            <div style="font-size:26px;font-weight:900;color:${isOverdue?"#c0392b":isApproaching?"#b7600a":pal.accent};line-height:1;">${daysLeft!==null?(daysLeft<0?"!":daysLeft):"—"}</div>
-            <div style="font-size:9px;font-weight:700;color:${pal.label};letter-spacing:0.07em;margin-top:3px;opacity:0.75;text-transform:uppercase;">Days Left</div>
+            <div style="font-size:26px;font-weight:900;color:${cardUrgency==="red"?"#c0392b":cardUrgency==="amber"?"#b7600a":pal.accent};line-height:1;">${topTasks.length}</div>
+            <div style="font-size:9px;font-weight:700;color:${pal.label};letter-spacing:0.07em;margin-top:3px;opacity:0.75;text-transform:uppercase;">Showing</div>
           </div>
         </div>
 
         <!-- Divider -->
         <div style="height:1.5px;background:${pal.divider};margin:0 12px;"></div>
 
-        <!-- Task rows -->
+        <!-- Task rows — each gets its own red / amber / cream row colour -->
         <div style="padding:10px 12px;display:grid;gap:5px;">
           ${topTasks.length === 0
             ? `<div style="text-align:center;padding:12px 0;color:${pal.label};font-size:12px;opacity:0.6;">✅ All clear!</div>`
             : topTasks.map(t => {
                 const isDone    = isTaskCompleted(t.id);
                 const isWorking = isTaskWorking(t.id);
-                const sevMap = {P1:["#fdecea","#c0392b"],P2:["#fef6e4","#b7600a"],P3:["#d1fae5","#065f46"],P4:["#f1f5f9","#64748b"]};
-                const [sb,sc] = sevMap[t.severity] || ["#f1f5f9","#64748b"];
-                const taskOD = t.due && t.due < "2026-06-21";
-                const rowBg = isDone ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.65)";
+                const urg = rowUrgency(t);
+                const taskDl  = t.due ? Math.ceil((new Date(t.due) - new Date(TODAY)) / 86400000) : null;
+                const dueLabel = !t.due ? "" : taskDl <= 0 ? "Overdue" : taskDl === 1 ? "Tomorrow" : taskDl <= 6 ? `${taskDl}d left` : formatDue(t.due);
                 return `
                   <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;
-                               background:${rowBg};border:1px solid rgba(180,140,90,0.22);
-                               cursor:pointer;transition:background 0.1s;opacity:${isDone?0.6:1};"
-                       onmouseover="this.style.background='rgba(255,255,255,0.9)'"
-                       onmouseout="this.style.background='${rowBg}'"
+                               background:${isDone?"rgba(255,255,255,0.4)":ROW_BG[urg]};
+                               border:1px solid ${isDone?"rgba(180,150,100,0.15)":ROW_BDR[urg]};
+                               cursor:pointer;transition:filter 0.1s;opacity:${isDone?0.55:1};"
+                       onmouseover="this.style.filter='brightness(0.95)'" onmouseout="this.style.filter='none'"
                        data-task="${t.id}">
-                    <span style="font-size:9px;font-weight:800;padding:2px 6px;border-radius:4px;background:${sb};color:${sc};flex-shrink:0;">${t.severity}</span>
+                    <span style="font-size:9px;font-weight:800;padding:2px 6px;border-radius:4px;background:${SEV_BG[t.severity]||"#f1f5f9"};color:${SEV_CLR[t.severity]||"#64748b"};flex-shrink:0;">${t.severity}</span>
                     <div style="flex:1;min-width:0;">
                       <div style="font-size:12px;font-weight:600;color:${isDone?"#a0856a":"#2d1505"};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;${isDone?"text-decoration:line-through;":""}">${escapeHtml(t.canonicalTitle)}</div>
-                      <div style="font-size:10px;color:${pal.label};display:flex;gap:5px;margin-top:1px;opacity:0.8;">
-                        <span>${t.owner||"Unassigned"}</span>
-                        ${t.due?`<span style="color:${taskOD?"#c0392b":pal.label};font-weight:${taskOD?700:400};">${taskOD?"Overdue":formatDue(t.due)}</span>`:""}
+                      <div style="font-size:10px;display:flex;gap:5px;margin-top:1px;">
+                        <span style="color:#8a6a3a;">${t.owner||"Unassigned"}</span>
+                        ${dueLabel ? `<span style="color:${DUE_CLR[urg]};font-weight:${urg!=="cream"?700:400};">${dueLabel}</span>` : ""}
                       </div>
                     </div>
-                    ${isWorking?`<span style="font-size:9px;color:#065f46;font-weight:800;flex-shrink:0;">● Active</span>`:""}
-                    ${isDone?`<span style="font-size:9px;color:#065f46;font-weight:800;flex-shrink:0;">✓</span>`:""}
-                    ${!isDone&&!isWorking?`<button class="tp-btn-start" data-task-start="${t.id}" style="font-size:10px;padding:3px 8px;flex-shrink:0;background:rgba(255,255,255,0.8);color:${pal.accent};border:1px solid ${pal.border};border-radius:5px;cursor:pointer;">▶</button>`:""}
-                  </div>`}).join("")
-          }
-          ${pending.length > 5 ? `<div style="text-align:center;padding:4px;font-size:11px;color:${pal.accent};font-weight:700;opacity:0.85;">+ ${pending.length-5} more →</div>` : ""}
+                    ${isWorking ? `<span style="font-size:9px;color:#065f46;font-weight:800;flex-shrink:0;">● Active</span>` : ""}
+                    ${isDone    ? `<span style="font-size:9px;color:#065f46;font-weight:800;flex-shrink:0;">✓</span>` : ""}
+                    ${!isDone&&!isWorking ? `<button class="tp-btn-start" data-task-start="${t.id}" style="font-size:10px;padding:3px 8px;flex-shrink:0;background:rgba(255,255,255,0.8);color:${pal.accent};border:1px solid ${pal.border};border-radius:5px;cursor:pointer;">▶</button>` : ""}
+                  </div>`;
+              }).join("")}
+          ${pending.length > MAX_SHOW ? `<div style="text-align:center;padding:5px;font-size:11px;color:${pal.accent};font-weight:700;opacity:0.85;">+ ${pending.length - MAX_SHOW} more →</div>` : ""}
         </div>
       </div>`;
   }).join("");
