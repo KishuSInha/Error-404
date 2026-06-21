@@ -53,27 +53,44 @@ let backendConfig = { geminiConfigured: false, teeMode: "local-attested", supaba
 const SOURCE_LOGO_MAP = {
   jira: {
     bg: "#e8f0ff",
-    svg: `<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><defs><linearGradient id="jL1" x1="100%" y1="3%" x2="45%" y2="55%" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#0052CC"/><stop offset="100%" stop-color="#2684FF"/></linearGradient><linearGradient id="jL2" x1="0%" y1="97%" x2="55%" y2="45%" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#0052CC"/><stop offset="100%" stop-color="#2684FF"/></linearGradient></defs><path d="M15.48 0l-7.74 7.74a2.67 2.67 0 000 3.77l3.97 3.97 7.74-7.74L15.48 0z" fill="url(#jL1)"/><path d="M8 7.78L.26 15.52a2.67 2.67 0 000 3.77L8 27.03l7.74-7.74L8 11.55V7.78z" fill="#2684FF"/><path d="M15.48 15.52L8 23.26 15.48 30.75l7.74-7.74a2.67 2.67 0 000-3.77l-7.74-3.72z" fill="url(#jL2)"/><path d="M23.22 7.78v3.77l-7.74 7.74 7.74 7.74 7.74-7.74a2.67 2.67 0 000-3.77L23.22 7.78z" fill="#2684FF"/></svg>`
+    // Official Jira gradient mark
+    svg: `<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><defs><linearGradient id="jL1" x1="100%" y1="3%" x2="45%" y2="55%"><stop offset="0%" stop-color="#0052CC"/><stop offset="100%" stop-color="#2684FF"/></linearGradient><linearGradient id="jL2" x1="0%" y1="97%" x2="55%" y2="45%"><stop offset="0%" stop-color="#0052CC"/><stop offset="100%" stop-color="#2684FF"/></linearGradient></defs><path d="M15.48 0l-7.74 7.74a2.67 2.67 0 000 3.77l3.97 3.97 7.74-7.74L15.48 0z" fill="url(#jL1)"/><path d="M8 7.78L.26 15.52a2.67 2.67 0 000 3.77L8 27.03l7.74-7.74L8 11.55V7.78z" fill="#2684FF"/><path d="M15.48 15.52L8 23.26 15.48 30.75l7.74-7.74a2.67 2.67 0 000-3.77l-7.74-3.72z" fill="url(#jL2)"/><path d="M23.22 7.78v3.77l-7.74 7.74 7.74 7.74 7.74-7.74a2.67 2.67 0 000-3.77L23.22 7.78z" fill="#2684FF"/></svg>`,
+    // SVG data-URI for use inside <image> tags in SVG canvas (source tree)
+    imgSrc: `data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='100%25' y1='3%25' x2='45%25' y2='55%25'%3E%3Cstop offset='0%25' stop-color='%230052CC'/%3E%3Cstop offset='100%25' stop-color='%232684FF'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='0%25' y1='97%25' x2='55%25' y2='45%25'%3E%3Cstop offset='0%25' stop-color='%230052CC'/%3E%3Cstop offset='100%25' stop-color='%232684FF'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M15.48 0l-7.74 7.74a2.67 2.67 0 000 3.77l3.97 3.97 7.74-7.74L15.48 0z' fill='url(%23a)'/%3E%3Cpath d='M8 7.78L.26 15.52a2.67 2.67 0 000 3.77L8 27.03l7.74-7.74L8 11.55V7.78z' fill='%232684FF'/%3E%3Cpath d='M15.48 15.52L8 23.26 15.48 30.75l7.74-7.74a2.67 2.67 0 000-3.77l-7.74-3.72z' fill='url(%23b)'/%3E%3Cpath d='M23.22 7.78v3.77l-7.74 7.74 7.74 7.74 7.74-7.74a2.67 2.67 0 000-3.77L23.22 7.78z' fill='%232684FF'/%3E%3C/svg%3E`
   },
   github: {
     bg: "#f0f0f0",
-    svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><path fill="#24292f" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>`
+    svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><path fill="#24292f" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>`,
+    imgSrc: `data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%2324292f' d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z'/%3E%3C/svg%3E`
   },
   servicenow: {
     bg: "#fde8e8",
-    svg: `<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="32" height="32" rx="6" fill="#c0392b"/><path d="M8 22c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V12c0-1.1-.9-2-2-2H10c-1.1 0-2 .9-2 2v10zm3-9h10v8H11v-8zm3 5h4v-2h-4v2z" fill="#fff"/><circle cx="16" cy="8" r="2" fill="#fff"/></svg>`
+    // ServiceNow "Now" wordmark circle — red with white "N" spike
+    svg: `<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="16" cy="16" r="16" fill="#c0392b"/><path d="M10 22l6-12 6 12" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M10 22h12" stroke="#fff" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>`,
+    imgSrc: `data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='16' cy='16' r='16' fill='%23c0392b'/%3E%3Cpath d='M10 22l6-12 6 12' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3Cpath d='M10 22h12' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' fill='none'/%3E%3C/svg%3E`
   },
   email: {
     bg: "#dbeafe",
-    svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect x="0" y="3" width="24" height="18" rx="2.5" fill="#0078D4"/><path d="M2 6l10 7 10-7" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>`
+    // Microsoft Outlook blue envelope
+    svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect x="1" y="4" width="22" height="16" rx="2" fill="#0078D4"/><path d="M1 7l11 7 11-7" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`,
+    imgSrc: `data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='1' y='4' width='22' height='16' rx='2' fill='%230078D4'/%3E%3Cpath d='M1 7l11 7 11-7' stroke='%23fff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E`
   },
   slack: {
     bg: "#f5eeff",
-    svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><path d="M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313zm2.521-10.123a2.528 2.528 0 01-2.521-2.52A2.528 2.528 0 018.834 0a2.528 2.528 0 012.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 012.521 2.521 2.528 2.528 0 01-2.521 2.521H2.522A2.528 2.528 0 010 8.834a2.528 2.528 0 012.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.528 2.528 0 01-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 01-2.523 2.521 2.527 2.527 0 01-2.52-2.521V2.522A2.527 2.527 0 0115.165 0a2.528 2.528 0 012.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 012.523 2.522A2.528 2.528 0 0115.165 24a2.527 2.527 0 01-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 01-2.52-2.523 2.526 2.526 0 012.52-2.52h6.313A2.527 2.527 0 0124 15.165a2.528 2.528 0 01-2.522 2.523h-6.313z" fill="#4A154B"/></svg>`
+    // Official Slack 4-colour hash mark
+    svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><path d="M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313zm2.521-10.123a2.528 2.528 0 01-2.521-2.52A2.528 2.528 0 018.834 0a2.528 2.528 0 012.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 012.521 2.521 2.528 2.528 0 01-2.521 2.521H2.522A2.528 2.528 0 010 8.834a2.528 2.528 0 012.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.528 2.528 0 01-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 01-2.523 2.521 2.527 2.527 0 01-2.52-2.521V2.522A2.527 2.527 0 0115.165 0a2.528 2.528 0 012.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 012.523 2.522A2.528 2.528 0 0115.165 24a2.527 2.527 0 01-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 01-2.52-2.523 2.526 2.526 0 012.52-2.52h6.313A2.527 2.527 0 0124 15.165a2.528 2.528 0 01-2.522 2.523h-6.313z" fill="#4A154B"/></svg>`,
+    imgSrc: `data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313zm2.521-10.123a2.528 2.528 0 01-2.521-2.52A2.528 2.528 0 018.834 0a2.528 2.528 0 012.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 012.521 2.521 2.528 2.528 0 01-2.521 2.521H2.522A2.528 2.528 0 010 8.834a2.528 2.528 0 012.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.528 2.528 0 01-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 01-2.523 2.521 2.527 2.527 0 01-2.52-2.521V2.522A2.527 2.527 0 0115.165 0a2.528 2.528 0 012.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 012.523 2.522A2.528 2.528 0 0115.165 24a2.527 2.527 0 01-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 01-2.52-2.523 2.526 2.526 0 012.52-2.52h6.313A2.527 2.527 0 0124 15.165a2.528 2.528 0 01-2.522 2.523h-6.313z' fill='%234A154B'/%3E%3C/svg%3E`
   },
   notes: {
     bg: "#d1fae5",
-    svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect x="3" y="2" width="18" height="20" rx="2" fill="#0f766e"/><path d="M7 7h10M7 11h10M7 15h6" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>`
+    // Google Calendar-style teal calendar icon
+    svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect x="2" y="3" width="20" height="19" rx="2.5" fill="#0f766e"/><rect x="2" y="3" width="20" height="7" rx="2.5" fill="#0d9488"/><rect x="2" y="8" width="20" height="2" fill="#0d9488"/><circle cx="8" cy="2" r="1.5" fill="#fff"/><circle cx="16" cy="2" r="1.5" fill="#fff"/><rect x="7" y="14" width="3" height="3" rx="1" fill="#fff"/><rect x="11" y="14" width="3" height="3" rx="1" fill="#a7f3d0"/><rect x="15" y="14" width="3" height="3" rx="1" fill="#a7f3d0"/></svg>`,
+    imgSrc: `data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='2' y='3' width='20' height='19' rx='2.5' fill='%230f766e'/%3E%3Crect x='2' y='3' width='20' height='7' rx='2.5' fill='%230d9488'/%3E%3Crect x='2' y='8' width='20' height='2' fill='%230d9488'/%3E%3Ccircle cx='8' cy='2' r='1.5' fill='%23fff'/%3E%3Ccircle cx='16' cy='2' r='1.5' fill='%23fff'/%3E%3Crect x='7' y='14' width='3' height='3' rx='1' fill='%23fff'/%3E%3Crect x='11' y='14' width='3' height='3' rx='1' fill='%23a7f3d0'/%3E%3Crect x='15' y='14' width='3' height='3' rx='1' fill='%23a7f3d0'/%3E%3C/svg%3E`
+  },
+  zoom: {
+    bg: "#e0f2fe",
+    svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="24" height="24" rx="6" fill="#2D8CFF"/><path d="M4 8.5A1.5 1.5 0 015.5 7h8A1.5 1.5 0 0115 8.5v7A1.5 1.5 0 0113.5 17h-8A1.5 1.5 0 014 15.5v-7zm11 2.2l3.6-2.4A.5.5 0 0120 8.8v6.4a.5.5 0 01-.8.4L15 13.3V10.7z" fill="#fff"/></svg>`,
+    imgSrc: `data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='24' height='24' rx='6' fill='%232D8CFF'/%3E%3Cpath d='M4 8.5A1.5 1.5 0 015.5 7h8A1.5 1.5 0 0115 8.5v7A1.5 1.5 0 0113.5 17h-8A1.5 1.5 0 014 15.5v-7zm11 2.2l3.6-2.4A.5.5 0 0120 8.8v6.4a.5.5 0 01-.8.4L15 13.3V10.7z' fill='%23fff'/%3E%3C/svg%3E`
   }
 };
 
@@ -351,7 +368,7 @@ const MANAGER_NAV = [
     ["meetings","Meetings","◷"],
     ["hidden","Hidden asks","◇"]
   ]},
-  { label: "Genome",       items: [["genome","Sprint Genome","🧬"]] },
+  { label: "Genome",       items: [["genome","Sprint Genome","🧬"],["calendar-ai","CalendarAI","📆"]] },
   { label: "Team",         items: [["team-portal","Team workload","📋"],["analytics","Analytics","▥"],["engineer-analytics","Engineer Charts","📈"]] },
   { label: "Account",      items: [["settings","Settings","⚙"]] }
 ];
@@ -902,6 +919,8 @@ function renderPageContent(selected, executionBrief, dynamicPlan) {
       return renderWorkspaceHub();
     case "genome":
       return renderProjectGenomePage();
+    case "calendar-ai":
+      return renderCalendarAI();
     case "incidents":
       return renderIncidentsTable();
     case "github":
@@ -1164,6 +1183,182 @@ function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
           </div>
         </div>
       </div>
+    </div>
+  `;
+}
+
+// ─── CalendarAI ──────────────────────────────────────────────────────────────
+/**
+ * Smart calendar that allocates tasks to engineers based on:
+ * - Actual historical completion times (from taskTimeLogs)
+ * - Task deadlines
+ * - Per-engineer workload
+ */
+function renderCalendarAI() {
+  const engineers = [...new Set(state.prioritized.map(t => t.owner).filter(Boolean))].slice(0, 8);
+  const activeTasks = state.prioritized.filter(t => !isTaskCompleted(t.id) && t.owner);
+  const TODAY = "2026-06-21";
+
+  // Compute average completion time per engineer from taskTimeLogs
+  const avgTimes = {};
+  for (const [id, log] of Object.entries(taskTimeLogs)) {
+    if (!log.endTime || !log.startTime) continue;
+    const mins = Math.round((new Date(log.endTime) - new Date(log.startTime)) / 60000);
+    const task = state.prioritized.find(t => t.id === id);
+    const owner = task?.owner || "Unknown";
+    if (!avgTimes[owner]) avgTimes[owner] = { total: 0, count: 0 };
+    avgTimes[owner].total += mins;
+    avgTimes[owner].count += 1;
+  }
+
+  // Default estimate: P1=90min, P2=120min, P3=180min, P4=240min
+  const sevMins = { P1: 90, P2: 120, P3: 180, P4: 240 };
+
+  // Build a day-by-day schedule per engineer (next 7 days)
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date("2026-06-21");
+    d.setDate(d.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+
+  // Assign tasks to days based on deadline and estimated duration
+  function buildSchedule(engineer) {
+    const myTasks = activeTasks
+      .filter(t => t.owner === engineer)
+      .sort((a, b) => {
+        const ap = a.severity === "P1" ? 0 : a.severity === "P2" ? 1 : 2;
+        const bp = b.severity === "P1" ? 0 : b.severity === "P2" ? 1 : 2;
+        if (ap !== bp) return ap - bp;
+        if (a.due && b.due) return a.due.localeCompare(b.due);
+        return 0;
+      });
+
+    const avgMin = avgTimes[engineer]
+      ? Math.round(avgTimes[engineer].total / avgTimes[engineer].count)
+      : null;
+
+    // 7.5 hours = 450 min available per day
+    const dayLoad = {};
+    days.forEach(d => dayLoad[d] = 0);
+
+    return myTasks.map(task => {
+      const estMin = avgMin || sevMins[task.severity] || 120;
+      // Find earliest day with capacity, respecting deadline
+      const deadline = task.due || days[days.length - 1];
+      const slot = days.find(d => d <= deadline && dayLoad[d] + estMin <= 450) || deadline;
+      if (dayLoad[slot] !== undefined) dayLoad[slot] += estMin;
+      return { task, day: slot, estMin };
+    });
+  }
+
+  const SEV_COLOR = { P1: "#c0392b", P2: "#b7600a", P3: "#0f766e", P4: "#64748b" };
+  const SEV_BG    = { P1: "#fdecea", P2: "#fef6e4", P3: "#f0fdfa", P4: "#f8fafc" };
+  const ENG_COLORS = ["#2563eb","#7c3aed","#0f766e","#c0392b","#b7600a","#065f46","#1d4ed8","#4A154B"];
+
+  const schedules = engineers.map((eng, ei) => ({
+    engineer: eng,
+    color: ENG_COLORS[ei % ENG_COLORS.length],
+    slots: buildSchedule(eng)
+  }));
+
+  const totalAllocated = schedules.reduce((s, e) => s + e.slots.length, 0);
+
+  return `
+    <div style="padding:24px;max-width:1200px;margin:0 auto;">
+
+      <!-- Header -->
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;">
+        <div>
+          <p class="eyebrow">AI-Powered Scheduling</p>
+          <h1 style="margin:2px 0 0;font-size:26px;color:#172b4d;">📆 CalendarAI</h1>
+          <p style="font-size:13px;color:#626f86;margin:4px 0 0;">
+            Auto-allocates ${totalAllocated} tasks across ${engineers.length} engineers · based on deadlines, severity &amp; actual completion times
+          </p>
+        </div>
+      </div>
+
+      <!-- Engineer legend -->
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px;">
+        ${schedules.map(s => `
+          <div style="display:flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;background:${s.color}18;border:1px solid ${s.color}40;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${s.color};flex-shrink:0;"></span>
+            <span style="font-size:12px;font-weight:700;color:${s.color};">${s.engineer}</span>
+            <span style="font-size:11px;color:#626f86;">${s.slots.length} tasks</span>
+          </div>`).join("")}
+      </div>
+
+      <!-- 7-day grid -->
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:10px;">
+        ${days.map(day => {
+          const label = new Date(day + "T12:00:00").toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
+          const isToday = day === TODAY;
+          const allSlots = schedules.flatMap(s => s.slots.filter(sl => sl.day === day).map(sl => ({ ...sl, engineer: s.engineer, color: s.color })));
+          const totalMin = allSlots.reduce((s, sl) => s + sl.estMin, 0);
+          const loadPct = Math.min(100, Math.round((totalMin / 450) * 100));
+          const loadColor = loadPct >= 90 ? "#c0392b" : loadPct >= 65 ? "#b7600a" : "#0f766e";
+
+          return `
+            <div style="background:${isToday ? "#fffbeb" : "#fff"};border:${isToday ? "2px solid #f0b054" : "1.5px solid #e8ecf1"};border-radius:12px;overflow:hidden;min-height:220px;">
+              <!-- Day header -->
+              <div style="padding:10px 12px 8px;background:${isToday ? "#fef6e4" : "#fafbfc"};border-bottom:1px solid #f0f2f5;">
+                <div style="font-size:11px;font-weight:800;color:${isToday ? "#b7600a" : "#8590a2"};text-transform:uppercase;letter-spacing:0.06em;">${label}</div>
+                ${isToday ? `<div style="font-size:9px;color:#b7600a;font-weight:700;margin-top:1px;">TODAY</div>` : ""}
+                <!-- Load bar -->
+                <div style="margin-top:6px;height:4px;background:#f0f2f5;border-radius:999px;overflow:hidden;">
+                  <div style="width:${loadPct}%;height:100%;background:${loadColor};border-radius:inherit;transition:width 0.4s;"></div>
+                </div>
+                <div style="font-size:9px;color:${loadColor};font-weight:700;margin-top:2px;">${loadPct}% loaded · ${Math.round(totalMin/60*10)/10}h</div>
+              </div>
+              <!-- Task slots -->
+              <div style="padding:8px;display:grid;gap:4px;">
+                ${allSlots.length === 0
+                  ? `<div style="text-align:center;padding:16px 0;color:#94a3b8;font-size:11px;">Free</div>`
+                  : allSlots.map(sl => `
+                    <div style="padding:6px 8px;border-radius:7px;background:${sl.color}12;border-left:3px solid ${sl.color};cursor:pointer;" data-task="${sl.task.id}">
+                      <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px;">
+                        <span style="font-size:9px;font-weight:800;padding:1px 4px;border-radius:3px;background:${SEV_BG[sl.task.severity]};color:${SEV_COLOR[sl.task.severity]};">${sl.task.severity}</span>
+                        <span style="font-size:9px;color:${sl.color};font-weight:700;">${sl.engineer}</span>
+                        <span style="font-size:9px;color:#94a3b8;margin-left:auto;">~${sl.estMin >= 60 ? Math.round(sl.estMin/60*10)/10+"h" : sl.estMin+"m"}</span>
+                      </div>
+                      <div style="font-size:11px;font-weight:600;color:#172b4d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(sl.task.canonicalTitle)}</div>
+                    </div>`).join("")}
+              </div>
+            </div>`;
+        }).join("")}
+      </div>
+
+      <!-- Engineer detail rows -->
+      <div style="margin-top:24px;display:grid;gap:12px;">
+        <h3 style="margin:0 0 4px;font-size:15px;color:#172b4d;">Per-Engineer Schedule</h3>
+        ${schedules.map(s => {
+          const avgMin = avgTimes[s.engineer]
+            ? Math.round(avgTimes[s.engineer].total / avgTimes[s.engineer].count)
+            : null;
+          return `
+            <div style="background:#fff;border:1.5px solid #e8ecf1;border-left:4px solid ${s.color};border-radius:10px;padding:14px 16px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="width:32px;height:32px;border-radius:50%;background:${s.color};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;">${s.engineer[0]}</div>
+                  <div>
+                    <div style="font-size:13px;font-weight:800;color:#172b4d;">${s.engineer}</div>
+                    <div style="font-size:11px;color:#626f86;">${s.slots.length} tasks allocated${avgMin ? ` · avg ${avgMin >= 60 ? Math.round(avgMin/60*10)/10+"h" : avgMin+"m"} per task` : ""}</div>
+                  </div>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px;">
+                ${s.slots.map(sl => `
+                  <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:7px;background:${s.color}08;border:1px solid ${s.color}25;cursor:pointer;" data-task="${sl.task.id}">
+                    <span style="font-size:9px;font-weight:800;padding:2px 5px;border-radius:3px;background:${SEV_BG[sl.task.severity]};color:${SEV_COLOR[sl.task.severity]};flex-shrink:0;">${sl.task.severity}</span>
+                    <div style="min-width:0;flex:1;">
+                      <div style="font-size:12px;font-weight:600;color:#172b4d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(sl.task.canonicalTitle)}</div>
+                      <div style="font-size:10px;color:#94a3b8;">${sl.day} · ~${sl.estMin >= 60 ? Math.round(sl.estMin/60*10)/10+"h" : sl.estMin+"m"}</div>
+                    </div>
+                  </div>`).join("")}
+              </div>
+            </div>`;
+        }).join("")}
+      </div>
+
     </div>
   `;
 }
@@ -3754,13 +3949,13 @@ function renderSourceTree() {
   const nodeRadius = 28;
   const centerX = 520, centerY = 200;
   const sourceNodes = [
-    { id:"all",         label:"All",      icon:"⊕", color:"#152238", angle: 0,   r: 0 },
-    { id:"jira",        label:"Jira",     icon:"J",  color:"#0c66e4", angle: 0,   r: 160 },
-    { id:"github",      label:"GitHub",   icon:"G",  color:"#24292f", angle: 60,  r: 160 },
-    { id:"servicenow",  label:"Snow",     icon:"SN", color:"#bf2600", angle: 120, r: 160 },
-    { id:"email",       label:"Outlook",  icon:"✉",  color:"#0284c7", angle: 180, r: 160 },
-    { id:"slack",       label:"Slack",    icon:"S",  color:"#6554c0", angle: 240, r: 160 },
-    { id:"notes",       label:"Meetings", icon:"M",  color:"#22a06b", angle: 300, r: 160 },
+    { id:"all",         label:"All",      imgSrc: null,                               color:"#152238", angle: 0,   r: 0 },
+    { id:"jira",        label:"Jira",     imgSrc: SOURCE_LOGO_MAP.jira.imgSrc,        color:"#0052CC", angle: 0,   r: 160 },
+    { id:"github",      label:"GitHub",   imgSrc: SOURCE_LOGO_MAP.github.imgSrc,      color:"#24292f", angle: 60,  r: 160 },
+    { id:"servicenow",  label:"Snow",     imgSrc: SOURCE_LOGO_MAP.servicenow.imgSrc,  color:"#c0392b", angle: 120, r: 160 },
+    { id:"email",       label:"Outlook",  imgSrc: SOURCE_LOGO_MAP.email.imgSrc,       color:"#0078D4", angle: 180, r: 160 },
+    { id:"slack",       label:"Slack",    imgSrc: SOURCE_LOGO_MAP.slack.imgSrc,       color:"#4A154B", angle: 240, r: 160 },
+    { id:"notes",       label:"Meetings", imgSrc: SOURCE_LOGO_MAP.notes.imgSrc,       color:"#0f766e", angle: 300, r: 160 },
   ];
 
   const toRad = d => d * Math.PI / 180;
@@ -3793,25 +3988,30 @@ function renderSourceTree() {
 
   const nodeEls = positioned.map((n,i) => {
     const active = scrumActiveSource === n.id;
+    const r = active ? nodeRadius + 4 : nodeRadius;
+    const logoSize = r * 1.1;
     return `
       <g class="tree-node ${active?"tree-node-active":""}" data-scrum-source="${n.id}"
          style="cursor:pointer;animation:popNode .5s cubic-bezier(.34,1.56,.64,1) ${i*0.09}s both;">
-        <circle cx="${n.x}" cy="${n.y}" r="${active ? nodeRadius+4 : nodeRadius}"
+        <circle cx="${n.x}" cy="${n.y}" r="${r}"
           fill="${active ? n.color : "#fff"}"
           stroke="${n.color}" stroke-width="${active?2.5:1.5}"
           filter="${active?"url(#glow)":"none"}">
         </circle>
-        <text x="${n.x}" y="${n.y-4}" text-anchor="middle" dominant-baseline="middle"
-          font-size="${n.id==="all"?15:13}" font-weight="800"
-          fill="${active?"#fff":n.color}">${n.icon}</text>
-        <text x="${n.x}" y="${n.y+10}" text-anchor="middle" dominant-baseline="middle"
-          font-size="9" font-weight="700" fill="${active?"#fff":n.color}" opacity="${active?1:.8}">
+        ${n.imgSrc
+          ? `<image href="${n.imgSrc}" x="${n.x - logoSize/2}" y="${n.y - logoSize/2 - 5}"
+               width="${logoSize}" height="${logoSize}"
+               style="filter:${active?"brightness(10)":"none"};"/>`
+          : `<text x="${n.x}" y="${n.y-4}" text-anchor="middle" dominant-baseline="middle"
+               font-size="15" font-weight="800" fill="#fff">⊕</text>`
+        }
+        <text x="${n.x}" y="${n.y + r - 7}" text-anchor="middle" dominant-baseline="middle"
+          font-size="9" font-weight="700" fill="${active?"#fff":n.color}" opacity="${active?1:.85}">
           ${n.label}
         </text>
         ${n.count > 0 ? `
-          <circle cx="${n.x+22}" cy="${n.y-22}" r="11" fill="${n.color}">
-          </circle>
-          <text x="${n.x+22}" y="${n.y-22}" text-anchor="middle" dominant-baseline="middle"
+          <circle cx="${n.x + r - 4}" cy="${n.y - r + 4}" r="11" fill="${n.color}"/>
+          <text x="${n.x + r - 4}" y="${n.y - r + 4}" text-anchor="middle" dominant-baseline="middle"
             font-size="9" font-weight="800" fill="#fff">${n.count}</text>
         ` : ""}
       </g>
