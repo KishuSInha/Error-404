@@ -1,13 +1,19 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&family=Poppins:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap');
 
 :root {
   color-scheme: light;
   font-family:
-    'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f7f4ee;
+    'Poppins', 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-weight: 300;
+  background: #fcfbf9;
   color: #17202a;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4, h5, h6, .eyebrow, .brand strong, .kpi-value, .scrum-card-id, .scrum-owner {
+  font-family: 'Montserrat', sans-serif !important;
+  font-weight: 400 !important;
 }
 
 * {
@@ -18,9 +24,8 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 244, 238, 0.4)),
-    #f7f4ee;
+  background: radial-gradient(at 0% 0%, rgba(247, 244, 238, 0.6) 0, transparent 50%), radial-gradient(at 50% 0%, rgba(139, 92, 246, 0.04) 0, transparent 50%), #fcfbf9;
+  transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 button,
@@ -4678,4 +4683,420 @@ h2 {
   50% {
     opacity: 0.5;
   }
+}
+
+/* ─── Modern Scrollbar & Theme Support ───────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb, rgba(0, 0, 0, 0.15)) transparent;
+}
+
+:root {
+  --scrollbar-thumb: rgba(23, 32, 42, 0.12);
+  --bg-gradient-top: rgba(255, 255, 255, 0.72);
+  --bg-gradient-bottom: rgba(247, 244, 238, 0.4);
+  --bg-solid: #fcfbf9;
+}
+
+[data-theme="dark"] {
+  --scrollbar-thumb: rgba(240, 246, 252, 0.15);
+  color-scheme: dark;
+  background: #0d1117 !important;
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] body {
+  background: radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.06) 0, transparent 50%), radial-gradient(at 50% 0%, rgba(59, 130, 246, 0.03) 0, transparent 50%), #0d1117 !important;
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .sidebar {
+  background: #161b22 !important;
+  border-right: 1px solid #21262d !important;
+}
+
+[data-theme="dark"] .discord-user-panel {
+  background: #21262d !important;
+  border: 1px solid #30363d !important;
+}
+
+[data-theme="dark"] .discord-user-panel div,
+[data-theme="dark"] .discord-user-panel span {
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .brand-mark {
+  background: #21262d !important;
+  border: 1px solid #30363d !important;
+}
+
+[data-theme="dark"] .brand span,
+[data-theme="dark"] .small,
+[data-theme="dark"] .task-card p,
+[data-theme="dark"] .task-meta small,
+[data-theme="dark"] .slot span,
+[data-theme="dark"] .hero-card small,
+[data-theme="dark"] .topbar-subtitle,
+[data-theme="dark"] .topbar p {
+  color: #8b949e !important;
+}
+
+[data-theme="dark"] .brand strong {
+  color: #f0f6fc !important;
+}
+
+[data-theme="dark"] .profile-toggle {
+  border: 1px solid #30363d !important;
+  background: #161b22 !important;
+}
+
+[data-theme="dark"] .profile-toggle button {
+  color: #8b949e !important;
+}
+
+[data-theme="dark"] .profile-toggle button.active {
+  background: #f0f6fc !important;
+  color: #0d1117 !important;
+}
+
+[data-theme="dark"] .panel,
+[data-theme="dark"] .hero-card,
+[data-theme="dark"] .board {
+  border: 1px solid #30363d !important;
+  background: rgba(22, 27, 34, 0.8) !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4) !important;
+}
+
+[data-theme="dark"] .metric-list span,
+[data-theme="dark"] .tag-row span {
+  background: #21262d !important;
+  color: #c9d1d9 !important;
+}
+
+[data-theme="dark"] .source-list button {
+  color: #c9d1d9 !important;
+}
+
+[data-theme="dark"] .source-list button.active {
+  background: #21262d !important;
+  outline: 1px solid #30363d !important;
+}
+
+[data-theme="dark"] .api-label {
+  color: #c9d1d9 !important;
+}
+
+[data-theme="dark"] .api-label input {
+  border: 1px solid #30363d !important;
+  background: #0d1117 !important;
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .primary {
+  background: #f0f6fc !important;
+  color: #0d1117 !important;
+}
+
+[data-theme="dark"] .primary:hover {
+  background: #e6edf3 !important;
+}
+
+[data-theme="dark"] .secondary {
+  background: #21262d !important;
+  color: #c9d1d9 !important;
+  border: 1px solid #30363d !important;
+}
+
+[data-theme="dark"] .secondary:hover {
+  background: #30363d !important;
+}
+
+[data-theme="dark"] .hero-card.priority {
+  background: #161b22 !important;
+  color: #f0f6fc !important;
+  border: 1px solid #30363d !important;
+}
+
+[data-theme="dark"] .hero-card.priority p,
+[data-theme="dark"] .hero-card.priority .eyebrow {
+  color: #8b949e !important;
+}
+
+[data-theme="dark"] .hero-card.alert {
+  border-color: #f85149 !important;
+  background: rgba(248, 81, 73, 0.08) !important;
+}
+
+[data-theme="dark"] .hero-card.trust {
+  border-color: #2ea043 !important;
+  background: rgba(46, 160, 67, 0.08) !important;
+}
+
+[data-theme="dark"] .confidence {
+  background: #21262d !important;
+}
+
+[data-theme="dark"] .task-card {
+  border: 1px solid #30363d !important;
+  background: #161b22 !important;
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .task-card.selected {
+  border-color: #f0f6fc !important;
+  box-shadow: inset 4px 0 0 #f0f6fc !important;
+}
+
+[data-theme="dark"] .reason-list {
+  color: #8b949e !important;
+}
+
+[data-theme="dark"] .slot time {
+  color: #e3b341 !important;
+}
+
+[data-theme="dark"] .quick-queries button {
+  background: #21262d !important;
+  color: #c9d1d9 !important;
+}
+
+[data-theme="dark"] .answer {
+  background: #161b22 !important;
+  color: #c9d1d9 !important;
+}
+
+[data-theme="dark"] .companion-avatar {
+  border: 2px solid #30363d !important;
+  background: #21262d !important;
+}
+
+[data-theme="dark"] .companion-panel {
+  border: 1px solid #30363d !important;
+  background: #161b22 !important;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5) !important;
+}
+
+[data-theme="dark"] .companion-head {
+  border-bottom: 1px solid #30363d !important;
+}
+
+[data-theme="dark"] .companion-head span {
+  color: #8b949e !important;
+}
+
+[data-theme="dark"] .companion-head button {
+  background: #f0f6fc !important;
+  color: #0d1117 !important;
+}
+
+[data-theme="dark"] .quick-chip {
+  background: #21262d !important;
+  color: #c9d1d9 !important;
+}
+
+[data-theme="dark"] .quick-chip:hover {
+  background: #30363d !important;
+}
+
+[data-theme="dark"] .plan-step {
+  background: #21262d !important;
+  color: #c9d1d9 !important;
+}
+
+[data-theme="dark"] .step-icon {
+  background: #30363d !important;
+  color: #8b949e !important;
+}
+
+[data-theme="dark"] .companion-log .agent {
+  background: #21262d !important;
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .companion-log .user {
+  background: #f0f6fc !important;
+  color: #0d1117 !important;
+}
+
+[data-theme="dark"] .companion form {
+  border-top: 1px solid #30363d !important;
+}
+
+[data-theme="dark"] .login-shell {
+  background: #0d1117 !important;
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .login-card {
+  background: #161b22 !important;
+  border-color: #30363d !important;
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .google-login {
+  background: #21262d !important;
+  color: #c9d1d9 !important;
+  border: 1px solid #30363d !important;
+}
+
+[data-theme="dark"] .google-login:hover {
+  background: #30363d !important;
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] textarea {
+  background: #0d1117 !important;
+  color: #e6edf3 !important;
+  border-color: #30363d !important;
+}
+
+[data-theme="dark"] h1,
+[data-theme="dark"] h2,
+[data-theme="dark"] h3,
+[data-theme="dark"] h4,
+[data-theme="dark"] strong {
+  color: #f0f6fc !important;
+}
+
+[data-theme="dark"] .ws-source-tab {
+  color: #8b949e !important;
+}
+
+[data-theme="dark"] .ws-source-tab.active {
+  background: #21262d !important;
+  color: #f0f6fc !important;
+}
+
+[data-theme="dark"] .ws-task-item {
+  background: #161b22 !important;
+  border-color: #30363d !important;
+}
+
+[data-theme="dark"] .ws-task-item:hover {
+  background: #21262d !important;
+}
+
+[data-theme="dark"] .scrum-column {
+  background: #161b22 !important;
+  border-color: #30363d !important;
+}
+
+[data-theme="dark"] .scrum-card {
+  background: #21262d !important;
+  border-color: #30363d !important;
+}
+
+[data-theme="dark"] .scrum-card-selected {
+  border-color: #f0f6fc !important;
+  box-shadow: 0 0 0 2px #f0f6fc !important;
+}
+
+[data-theme="dark"] .scrum-card-title {
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .scrum-date-label {
+  color: #8b949e !important;
+  background: #161b22 !important;
+}
+
+[data-theme="dark"] .scrum-stream-card {
+  background: #161b22 !important;
+  border-color: #30363d !important;
+}
+
+[data-theme="dark"] .scrum-stream-card.sel {
+  border-color: #f0f6fc !important;
+}
+
+[data-theme="dark"] .scrum-stream-card strong {
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .eng-kpi-card {
+  background: #161b22 !important;
+  border-color: #30363d !important;
+}
+
+[data-theme="dark"] .eng-task-item {
+  background: #161b22 !important;
+  border-color: #30363d !important;
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .eng-task-item.selected {
+  border-color: #f0f6fc !important;
+}
+
+[data-theme="dark"] .hero-focus-card {
+  background: #1c2128 !important;
+}
+
+[data-theme="dark"] .meeting-card-btn {
+  background: #161b22 !important;
+  border-color: #30363d !important;
+}
+
+[data-theme="dark"] .meeting-card-btn.selected {
+  border-color: var(--meet-accent) !important;
+  background: var(--meet-bg-tint) !important;
+}
+
+[data-theme="dark"] .meeting-card-title {
+  color: #e6edf3 !important;
+}
+
+[data-theme="dark"] .meeting-terminal {
+  background: #0d1117 !important;
+  border-color: #30363d !important;
+  color: #39eb0a !important;
+}
+
+[data-theme="dark"] .meeting-board {
+  background: #161b22 !important;
+  border-color: #30363d !important;
+}
+
+/* ─── Clean Theme Switch UI ─── */
+.theme-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid #dcd5c6;
+  background: #fff8ed;
+  color: #17202a;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.theme-toggle-btn:hover {
+  background: #efe6d4;
+  transform: scale(1.05);
+}
+
+.theme-toggle-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+}
+
+[data-theme="dark"] .theme-toggle-btn {
+  background: #21262d;
+  color: #f0f6fc;
+  border-color: #30363d;
+}
+
+[data-theme="dark"] .theme-toggle-btn:hover {
+  background: #30363d;
+}
+
+
+/* ── Inline agent chat typing indicator ── */
+@keyframes blink {
+  0%, 100% { opacity: 0.15; }
+  50%       { opacity: 1; }
 }

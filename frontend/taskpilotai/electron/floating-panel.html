@@ -2,11 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script>
+      (function() {
+        const theme = localStorage.getItem('taskpilot:theme') || 'light';
+        document.documentElement.setAttribute('data-theme', theme);
+      })();
+    </script>
     <style>
       /* ── Design tokens matching the main TaskPilot app ── */
       :root {
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        color-scheme: light;
+        font-family: 'Poppins', Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color-scheme: light dark;
 
         --bg:        #f7f4ee;
         --surface:   #fffdf8;
@@ -27,6 +35,89 @@
         --user-bg:   #152238;
         --user-text: #fff;
         --card-bg:   rgba(255,252,247,0.96);
+      }
+
+      /* ── Dark mode overrides ── */
+      [data-theme="dark"] {
+        color-scheme: dark;
+        --bg:        #0d1117;
+        --surface:   #161b22;
+        --sidebar:   #21262d;
+        --border:    #30363d;
+        --border2:   #30363d;
+        --text:      #e6edf3;
+        --text2:     #8b949e;
+        --eyebrow:   #c9a96e;
+        --navy:      #c9d1d9;
+        --green:     #3fb950;
+        --green-bg:  #122a1a;
+        --amber:     #e3b341;
+        --red:       #f85149;
+        --chip-bg:   #21262d;
+        --chip-text: #c9d1d9;
+        --agent-bg:  #21262d;
+        --user-bg:   #0c66e4;
+        --user-text: #fff;
+        --card-bg:   rgba(22,27,34,0.95);
+      }
+
+      [data-theme="dark"] .panel {
+        background: var(--surface) !important;
+        border-color: var(--border) !important;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 4px 16px rgba(0,0,0,0.3) !important;
+      }
+
+      [data-theme="dark"] .head {
+        background: var(--sidebar) !important;
+        border-color: var(--border2) !important;
+      }
+
+      [data-theme="dark"] .task-bar {
+        background: var(--bg) !important;
+        border-color: var(--border2) !important;
+      }
+
+      [data-theme="dark"] .task-pill {
+        background: var(--surface) !important;
+        border-color: var(--border) !important;
+        color: var(--text2) !important;
+      }
+
+      [data-theme="dark"] .task-pill:hover {
+        background: var(--chip-bg) !important;
+        color: var(--text) !important;
+      }
+
+      [data-theme="dark"] .chip {
+        background: var(--chip-bg) !important;
+        border-color: var(--border) !important;
+        color: var(--chip-text) !important;
+      }
+
+      [data-theme="dark"] .head-btn {
+        background: var(--surface) !important;
+        border-color: var(--border) !important;
+        color: var(--text2) !important;
+      }
+
+      [data-theme="dark"] .head-btn:hover {
+        background: var(--chip-bg) !important;
+        color: var(--text) !important;
+      }
+
+      [data-theme="dark"] .input-area {
+        border-color: var(--border2) !important;
+        background: var(--bg) !important;
+      }
+
+      [data-theme="dark"] #input {
+        background: var(--bg) !important;
+        color: var(--text) !important;
+      }
+
+      [data-theme="dark"] .send-btn {
+        background: var(--text) !important;
+        color: var(--bg) !important;
       }
 
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -449,7 +540,7 @@
       <!-- Input -->
       <div class="input-area">
         <textarea id="input" rows="1" placeholder="Ask anything… (Enter to send)"></textarea>
-        <button class="send-btn" id="sendBtn" aria-label="Send">➜</button>
+        <button class="send-btn" id="sendBtn" aria-label="Send"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg></button>
       </div>
     </section>
 
@@ -477,11 +568,11 @@
       // ── Boot ──────────────────────────────────────────────────────────
       async function boot() {
         await wait(550);
-        agentSay(`Hey Utkarsh! 👋 Good to see you. Want me to pull up your task queue for today, or is there something specific on your mind?`);
+        agentSay(`Hey there! Good to see you. Want me to pull up your task queue for today, or is there something specific on your mind?`);
         showChips([
-          { label: '📋 Show my tasks for today', act: 'show-tasks' },
-          { label: '🔥 What\'s most urgent?',    act: 'show-top'   },
-          { label: '📧 Show VP emails',           act: 'vp-emails'  },
+          { label: '📅 Show my tasks', act: 'show-tasks' },
+          { label: "🚀 What's most urgent?",    act: 'show-top'   },
+          { label: '✉️ Show VP emails',           act: 'vp-emails'  },
         ]);
       }
 
@@ -788,10 +879,10 @@
         await think(950);
         const rem = remaining();
         if (!rem.length) {
-          agentSay("You've cleared your entire queue — nothing left for today! 🎉 Really impressive.");
+          agentSay("You've cleared your entire queue — nothing left for today! Really impressive.");
           return;
         }
-        agentSay(`Alright, here's your priority queue — **${rem.length} task${rem.length>1?'s':''} ranked** by urgency, SLA risk, and cross-system signals:\n\n💡 _Click any task card to see step-by-step guidance and open it in the source app._`);
+        agentSay(`Alright, here's your priority queue — **${rem.length} task${rem.length>1?'s':''} ranked** by urgency, SLA risk, and cross-system signals:\n\nClick any task card to see step-by-step guidance and open it in the source app.`);
         await wait(250);
         addMsg('agent', taskListEl(rem));
         await wait(350);
@@ -808,7 +899,7 @@
       async function showTopTask() {
         await think(800);
         const top = remaining()[0];
-        if (!top) { agentSay("Queue is empty — you're all done! 🎉"); return; }
+        if (!top) { agentSay("Queue is empty — you're all done!"); return; }
         const wrap = document.createElement('div');
         wrap.innerHTML = md('Your **#1 priority right now** is:');
         wrap.appendChild(taskCard(top, 1));
@@ -818,7 +909,7 @@
         refreshTaskBar();
         showChips([
           { label:'✅ Mark as done',        act:'done-top'   },
-          { label:'📋 Show full queue',     act:'show-tasks' },
+          { label:'📅 Show full queue',     act:'show-tasks' },
           { label:'⚡ I finished something', act:'done-ask'  },
         ]);
       }
@@ -882,7 +973,7 @@ Give a concise, actionable step-by-step procedure to resolve this — 4 to 6 num
 
         showChips([
           { label: '✅ Mark as done', act: `complete:${t.id}` },
-          { label: '📋 Back to queue', act: 'show-tasks' },
+          { label: '📅 Back to queue', act: 'show-tasks' },
         ]);
       }
 
@@ -930,11 +1021,11 @@ Give a concise, actionable step-by-step procedure to resolve this — 4 to 6 num
           agentSay(`This one's ${next.sev} priority and ${next.due==='Today'?'also due **today**':`due **${next.due}**`} — about ${next.eta}. Ready when you are!`);
           showChips([
             { label:'✅ Done with that too',  act:`complete:${next.id}` },
-            { label:'📋 Show full queue',     act:'show-tasks'          },
+            { label:'📅 Show full queue',     act:'show-tasks'          },
             { label:'🚀 Anything else?',      act:'show-top'            },
           ]);
         } else {
-          agentSay(`That's everything for today, Utkarsh! Queue is fully clear. 🎉 Want me to generate a quick end-of-day summary?`);
+          agentSay(`That's everything for today, Utkarsh! Queue is fully clear. Want me to generate a quick end-of-day summary?`);
           showChips([{ label:'📝 Generate summary', act:'daily-summary' }]);
         }
 
@@ -1079,9 +1170,9 @@ Be concise. Don't say "Gemini".`;
         }
 
         showChips([
-          { label: '📋 Summarize VP email',      act: 'summarize-vp'       },
+          { label: '📝 Summarize VP email',      act: 'summarize-vp'       },
           { label: '🔴 Make MAIL-VP-001 P1',     act: 'make-priority-vp'   },
-          { label: '📋 Show my tasks',            act: 'show-tasks'         },
+          { label: '📅 Show my tasks',            act: 'show-tasks'         },
         ]);
       }
 
@@ -1164,8 +1255,8 @@ Write 3 short bullet points explaining WHY this is now the #1 priority — cover
         refreshTaskBar();
         showChips([
           { label: `▶ Start ${email.id}`,       act: `explain:${newTaskId}` },
-          { label: '📋 Show updated queue',      act: 'show-tasks'           },
-          { label: '📧 Show all VP emails',      act: 'vp-emails'            },
+          { label: '📅 Show updated queue',      act: 'show-tasks'           },
+          { label: '✉️ Show all VP emails',      act: 'vp-emails'            },
         ]);
       }
 
@@ -1268,8 +1359,8 @@ Answer directly and specifically using the real data above. Reference actual ema
 
         const top = remaining()[0];
         showChips([
-          { label: '📋 Show my tasks', act: 'show-tasks' },
-          { label: '📧 Show VP emails', act: 'vp-emails' },
+          { label: '📅 Show my tasks', act: 'show-tasks' },
+          { label: '✉️ Show VP emails', act: 'vp-emails' },
           top ? { label: `🔍 Walk me through "${cut(top.title, 28)}"`, act: 'explain-top' } : { label: '🔥 Top priority', act: 'show-top' },
         ]);
       }

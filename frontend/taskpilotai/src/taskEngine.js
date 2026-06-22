@@ -77,8 +77,8 @@ export function buildTodayQueue(prioritizedTasks, engineerName, maxItems = 12) {
 export function buildTodayCapacityQueue(prioritizedTasks, engineerName, taskTimeLogs = {}) {
   const TODAY = new Date("2026-06-21");
   const todayStr = TODAY.toISOString().slice(0, 10);
-  const DAILY_CAPACITY = 450; // 7.5 hours in minutes
-  const MIN_TASKS = 7; // Always show at least 7 tasks
+  const DAILY_CAPACITY = 600; // 10 hours — show more tasks for demo
+  const MIN_TASKS = 10; // Always show at least 10 tasks
   
   const sevMins = { P1: 45, P2: 60, P3: 75, P4: 90 };
   
