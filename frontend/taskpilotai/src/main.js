@@ -11,6 +11,8 @@ const app = document.querySelector("#app");
 const isDesktopShell = Boolean(window.taskPilotDesktop?.isDesktop) || new URLSearchParams(window.location.search).has("desktop");
 
 // ─── Application State ────────────────────────────────────────────────────────
+let activeTheme = localStorage.getItem("taskpilot:theme") || "light";
+document.documentElement.setAttribute("data-theme", activeTheme);
 let activePage = "overview";
 let activeProfile = "engineer";
 let activeSource = "all";
@@ -133,7 +135,7 @@ let currentContext = null;
 let teeSession = createTeeSession();
 let dockEyesBound = false;
 let companionLog = [
-  { role: "agent", text: "Woof! TEE trust envelope attested! 🐾 I scanned Jira, ServiceNow, GitHub, Slack, Outlook, and meeting notes. I've sniffed out a P1 upload issue that is duplicated across 3 systems with an SLA due today. Let's tackle it! Bark!", chips: ["Show VP emails", "What's blocking my teammate?", "Why is the upload bug ranked #1?", "Top 5 tasks", "Show blockers"] }
+  { role: "agent", text: "TEE trust envelope attested! I scanned Jira, ServiceNow, GitHub, Slack, Outlook, and meeting notes. I've sniffed out a P1 upload issue that is duplicated across 3 systems with an SLA due today. Let's tackle it! Bark!", chips: ["Show VP emails", "What's blocking my teammate?", "Why is the upload bug ranked #1?", "Top 5 tasks", "Show blockers"] }
 ];
 
 // Sub-page states
@@ -804,6 +806,20 @@ function bindLoginEvents() {
 }
 
 // ─── Presence Helper Functions ───────────────────────────────────────────────
+// Deterministic fake last-seen offsets for demo engineers who have no real presence data.
+// Each name maps to a fixed offset so the times are stable across re-renders.
+const DEMO_PRESENCE_OFFSETS = {
+  "Karan":  { statusIdx: 1, minutesAgo: 7  },   // idle, 7 min ago
+  "Arjun":  { statusIdx: 2, minutesAgo: 23 },   // offline, 23 min ago
+  "Vikram": { statusIdx: 1, minutesAgo: 42 },   // idle, 42 min ago
+  "Riya":   { statusIdx: 0, minutesAgo: 3  },   // online, 3 min ago
+  "Aisha":  { statusIdx: 2, minutesAgo: 68 },   // offline, 1h 8m ago
+  "Rohan":  { statusIdx: 1, minutesAgo: 15 },   // idle, 15 min ago
+  "Neha":   { statusIdx: 2, minutesAgo: 94 },   // offline, 1h 34m ago
+  "Dev":    { statusIdx: 0, minutesAgo: 1  },   // online, 1 min ago
+};
+const DEMO_STATUS_BY_IDX = ["online", "idle", "offline"];
+
 function getPresenceForUser(name) {
   // Check backend presence store first (real-time)
   if (name && presenceAllUsers[name]) {
@@ -815,12 +831,31 @@ function getPresenceForUser(name) {
     }
     return { status: p.status, lastSeen: p.lastSeen };
   }
-  // Fallback to localStorage for own status
-  const lastActiveStr = localStorage.getItem("taskpilot:engineerLastActive");
-  if (!lastActiveStr) return { status: "offline", lastSeen: null };
-  const diffMs = Date.now() - new Date(lastActiveStr);
-  if (diffMs > 15000) return { status: "offline", lastSeen: lastActiveStr };
-  return { status: localStorage.getItem("taskpilot:engineerPresence") || "online", lastSeen: lastActiveStr };
+
+  // Utkarsh (the logged-in user) — use real localStorage activity
+  const myName = settingsProfile?.name || authSession?.name || "Utkarsh";
+  if (!name || name === myName) {
+    const lastActiveStr = localStorage.getItem("taskpilot:engineerLastActive");
+    if (!lastActiveStr) return { status: "offline", lastSeen: null };
+    const diffMs = Date.now() - new Date(lastActiveStr);
+    if (diffMs > 15000) return { status: "offline", lastSeen: lastActiveStr };
+    return { status: localStorage.getItem("taskpilot:engineerPresence") || "online", lastSeen: lastActiveStr };
+  }
+
+  // Other demo engineers — return deterministic fake presence so times differ per person
+  const demo = DEMO_PRESENCE_OFFSETS[name];
+  if (demo) {
+    const fakeLastSeen = new Date(Date.now() - demo.minutesAgo * 60 * 1000).toISOString();
+    const fakeStatus = DEMO_STATUS_BY_IDX[demo.statusIdx];
+    return { status: fakeStatus, lastSeen: fakeLastSeen };
+  }
+
+  // Unknown engineer — derive a stable offset from the name's char codes
+  const seed = name.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
+  const minutesAgo = 5 + (seed % 55); // 5–59 min ago
+  const statusIdx = seed % 3;
+  const fakeLastSeen = new Date(Date.now() - minutesAgo * 60 * 1000).toISOString();
+  return { status: DEMO_STATUS_BY_IDX[statusIdx], lastSeen: fakeLastSeen };
 }
 
 function getEngineerStatusText() {
@@ -876,7 +911,7 @@ function startWorkingOnTask(id) {
     };
   }
   if (task) saveWorkingTask(getUserEmail(), getUserName(), id, task.canonicalTitle);
-  if (task) pushCompanion("agent", `Woof! 🐾 Started working on "${task.canonicalTitle}". I'll keep my eyes on your progress and help you fetch results! Ruff!`, false);
+  if (task) pushCompanion("agent", `Started working on "${task.canonicalTitle}". I'll keep my eyes on your progress and help you fetch results!`, false);
   
   // Append system message to chat automatically: inform the manager
   const userDisplayName = settingsProfile.name || (activeProfile === "manager" ? "Manager" : "Engineer");
@@ -884,7 +919,7 @@ function startWorkingOnTask(id) {
     const startedChatMsg = {
       id: "msg-" + Date.now() + "-" + Math.random().toString(36).substr(2, 4),
       sender: "System",
-      text: `🤖 ⏳ ${userDisplayName} started working on task ${task.id}: "${task.canonicalTitle}" (${task.severity})`,
+      text: `[Agent] ${userDisplayName} started working on task ${task.id}: "${task.canonicalTitle}" (${task.severity})`,
       isSystem: true,
       timestamp: new Date().toISOString()
     };
@@ -910,7 +945,7 @@ function stopWorkingOnTask(id) {
     const stoppedChatMsg = {
       id: "msg-" + Date.now() + "-" + Math.random().toString(36).substr(2, 4),
       sender: "System",
-      text: `🤖 ⏸ ${userDisplayName} stopped/paused working on task ${task.id}: "${task.canonicalTitle}"`,
+      text: `[Agent] ${userDisplayName} stopped/paused working on task ${task.id}: "${task.canonicalTitle}"`,
       isSystem: true,
       timestamp: new Date().toISOString()
     };
@@ -1012,6 +1047,26 @@ function render() {
   bindEvents();
 }
 
+const NAV_ICONS = {
+  overview: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>`,
+  today: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>`,
+  "agent-scan": `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 21L8.188 15.904L3 15L8.188 14.096L9 9L9.813 14.096L15 15L9.813 15.904Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.071 4.929a10 10 0 00-14.142 0M12 3V1m0 22v-2m10-10h-2M4 12H2m16.071-6.071l-1.414 1.414M7.343 16.657l-1.414 1.414m12.728 0l-1.414-1.414M7.343 7.343L5.929 5.929"/></svg>`,
+  inbox: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0a2 2 0 01-2 2H6a2 2 0 01-2-2m16 0l-3.5 3.5a2 2 0 01-2.828 0L13.5 15M4 13L7.5 16.5a2 2 0 002.828 0L13.5 13"/></svg>`,
+  "source-tree": `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.697V19a2 2 0 01-2 2H4a2 2 0 01-2-2v-3a2 2 0 012-2h12a2 2 0 012 2v.697m0-5.394V10a2 2 0 00-2-2H4a2 2 0 00-2 2v3a2 2 0 002 2h12a2 2 0 002-2v-1.394m0-5.394V3a2 2 0 00-2-2H4a2 2 0 00-2 2v3a2 2 0 002 2h12a2 2 0 002-2V4.606z"/></svg>`,
+  meetings: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>`,
+  "my-analytics": `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10a2 2 0 01-2 2h-2a2 2 0 01-2-2zm9-10v10a2 2 0 002 2h2a2 2 0 002-2V9a2 2 0 00-2-2h-2a2 2 0 00-2 2z"/></svg>`,
+  analytics: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10a2 2 0 01-2 2h-2a2 2 0 01-2-2zm9-10v10a2 2 0 002 2h2a2 2 0 002-2V9a2 2 0 00-2-2h-2a2 2 0 00-2 2z"/></svg>`,
+  "eng-calendar": `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`,
+  "calendar-ai": `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`,
+  execution: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>`,
+  "eng-portal": `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>`,
+  "team-portal": `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>`,
+  chat: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>`,
+  settings: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>`,
+  genome: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4M16.5 7.5a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM16.5 16.5a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"/></svg>`,
+  "engineer-analytics": `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right:8px;"><path stroke-linecap="round" stroke-linejoin="round" d="M7 12l3-3 3 3 4-4M8 21h12a2 2 0 002-2V7a2 2 0 00-2-2H8a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`
+};
+
 function renderNavigation() {
   const currentNav = activeProfile === "manager" ? MANAGER_NAV : ENGINEER_NAV;
   // Map nav page IDs to SOURCE_LOGO_MAP keys
@@ -1028,10 +1083,10 @@ function renderNavigation() {
         const logoKey = NAV_LOGO[id];
         const navLogo = logoKey ? SOURCE_LOGO_MAP[logoKey] : null;
         const iconHtml = navLogo
-          ? `<span style="display:flex;width:22px;height:22px;align-items:center;justify-content:center;border-radius:5px;background:${navLogo.bg};">${navLogo.svg}</span>`
-          : `<span>${icon}</span>`;
+          ? `<span style="display:flex;width:22px;height:22px;align-items:center;justify-content:center;border-radius:5px;background:${navLogo.bg};margin-right:8px;">${navLogo.svg}</span>`
+          : `<span class="nav-svg-wrapper" style="display:inline-flex;align-items:center;justify-content:center;">${NAV_ICONS[id] || icon}</span>`;
         return `
-        <button class="${activePage === id ? "active" : ""}" data-nav="${id}">
+        <button class="${activePage === id ? "active" : ""}" data-nav="${id}" style="display:flex;align-items:center;">
           ${iconHtml}${label}
         </button>`;
       }).join("")}
@@ -1053,12 +1108,12 @@ function renderPageContent(selected, executionBrief, dynamicPlan) {
       const queue = activeQueue();
       const TODAY = "2026-06-21";
       const SOURCE_META = {
-        jira:        { label: "Jira Sprint Board",   emoji: "📋", color: "#1868db", pastel: "#eef3ff" },
-        github:      { label: "GitHub PRs",          emoji: "🔀", color: "#374151", pastel: "#f3f4f6" },
-        servicenow:  { label: "ServiceNow Defects",  emoji: "🚨", color: "#c0392b", pastel: "#fff1f0" },
-        email:       { label: "Outlook Emails",      emoji: "📧", color: "#0369a1", pastel: "#eff8ff" },
-        slack:       { label: "Slack Mentions",      emoji: "💬", color: "#7c3aed", pastel: "#f5f3ff" },
-        notes:       { label: "Meeting Notes",       emoji: "📌", color: "#0f766e", pastel: "#f0fdfa" }
+        jira:        { label: "Jira Sprint Board",   color: "#1868db", pastel: "#eef3ff" },
+        github:      { label: "GitHub PRs",          color: "#374151", pastel: "#f3f4f6" },
+        servicenow:  { label: "ServiceNow Defects",  color: "#c0392b", pastel: "#fff1f0" },
+        email:       { label: "Outlook Emails",      color: "#0369a1", pastel: "#eff8ff" },
+        slack:       { label: "Slack Mentions",      color: "#7c3aed", pastel: "#f5f3ff" },
+        notes:       { label: "Meeting Notes",       color: "#0f766e", pastel: "#f0fdfa" }
       };
 
       const triage = sources.map(src => {
@@ -1075,7 +1130,7 @@ function renderPageContent(selected, executionBrief, dynamicPlan) {
           return daysLeft > 0 && daysLeft <= 3;
         }).length;
 
-        const meta = SOURCE_META[src.id] || { label: src.name, emoji: "📌", color: src.color || "#64748b" };
+        const meta = SOURCE_META[src.id] || { label: src.name, color: src.color || "#64748b" };
 
         const isUrgent = p1Count > 0 || dueTodayCount > 0;
         const isApproaching = approachingCount > 0;
@@ -1115,18 +1170,20 @@ function renderPageContent(selected, executionBrief, dynamicPlan) {
             <!-- What to Do -->
             <div style="background: rgba(255, 252, 247, 0.94); border: 1.5px solid #ded5c8; border-radius: 12px; padding: 20px; box-shadow: 0 4px 14px rgba(0,0,0,0.03);">
               <h3 style="margin: 0 0 12px 0; color: #17202a; font-size: 16px; font-weight: 800; display: flex; align-items: center; gap: 8px;">
-                <span style="color: #de350b;">🔥</span> What to Do (High Focus Today)
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#de350b;"></span> What to Do (High Focus Today)
               </h3>
               <div style="display: grid; gap: 10px;">
                 ${whatToDo.length === 0 ? `
                   <div style="color: #65717d; font-size: 13px; font-style: italic; background: #fff; padding: 12px; border-radius: 8px; border: 1px dashed #ded5c8;">
                     No urgent or approaching deadlines today. Feel free to focus on secondary goals.
                   </div>
-                ` : whatToDo.map(item => `
+                ` : whatToDo.map(item => {
+                  const logo = SOURCE_LOGO_MAP[item.id];
+                  return `
                   <div style="background: #ffffff; border: 1px solid #ded5c8; border-radius: 8px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
                     <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
-                      <div style="width: 28px; height: 28px; border-radius: 6px; background: ${item.color}15; color: ${item.color}; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0;">
-                        ${item.emoji}
+                      <div style="width: 28px; height: 28px; border-radius: 6px; background: ${item.color}15; color: ${item.color}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; padding: 4px;">
+                        ${logo ? logo.svg : ""}
                       </div>
                       <div style="min-width: 0;">
                         <strong style="font-size: 13px; color: #17202a; display: block;">${escapeHtml(item.label)}</strong>
@@ -1138,26 +1195,28 @@ function renderPageContent(selected, executionBrief, dynamicPlan) {
                       ${item.p1Count > 0 ? `<span style="font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: #ffd5d2; color: #de350b; white-space: nowrap;">${item.p1Count} P1</span>` : ""}
                       ${item.approachingCount > 0 && item.dueTodayCount === 0 ? `<span style="font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: #fef3c7; color: #d97706; white-space: nowrap;">${item.approachingCount} Approaching</span>` : ""}
                     </div>
-                  </div>
-                `).join("")}
+                  </div>`;
+                }).join("")}
               </div>
             </div>
 
             <!-- What Not to Do -->
             <div style="background: rgba(255, 252, 247, 0.94); border: 1.5px solid #ded5c8; border-radius: 12px; padding: 20px; box-shadow: 0 4px 14px rgba(0,0,0,0.03);">
               <h3 style="margin: 0 0 12px 0; color: #17202a; font-size: 16px; font-weight: 800; display: flex; align-items: center; gap: 8px;">
-                <span style="color: #22a06b;">💤</span> What Not to Do (Safely Deprioritize)
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#22a06b;"></span> What Not to Do (Safely Deprioritize)
               </h3>
               <div style="display: grid; gap: 10px;">
                 ${whatNotToDo.length === 0 ? `
                   <div style="color: #65717d; font-size: 13px; font-style: italic; background: #fff; padding: 12px; border-radius: 8px; border: 1px dashed #ded5c8;">
                     All channels contain urgent or approaching tasks. No channels can be deprioritized today.
                   </div>
-                ` : whatNotToDo.map(item => `
+                ` : whatNotToDo.map(item => {
+                  const logo = SOURCE_LOGO_MAP[item.id];
+                  return `
                   <div style="background: #ffffff; border: 1px solid #ded5c8; border-radius: 8px; padding: 12px; display: flex; align-items: center; justify-content: space-between; opacity: 0.85;">
                     <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
-                      <div style="width: 28px; height: 28px; border-radius: 6px; background: #65717d15; color: #65717d; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0;">
-                        ${item.emoji}
+                      <div style="width: 28px; height: 28px; border-radius: 6px; background: #65717d15; color: #65717d; display: flex; align-items: center; justify-content: center; flex-shrink: 0; padding: 4px;">
+                        ${logo ? logo.svg : ""}
                       </div>
                       <div style="min-width: 0;">
                         <strong style="font-size: 13px; color: #17202a; display: block;">${escapeHtml(item.label)}</strong>
@@ -1169,8 +1228,8 @@ function renderPageContent(selected, executionBrief, dynamicPlan) {
                     <div>
                       <span style="font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: #f1f2f4; color: #44546f;">Stable</span>
                     </div>
-                  </div>
-                `).join("")}
+                  </div>`;
+                }).join("")}
               </div>
             </div>
           </div>
@@ -1245,7 +1304,7 @@ function renderLiveScanningPanel() {
     <div class="live-scanning-panel" id="liveScanningPanel">
       <div class="scanning-content">
         <div class="scanning-header">
-          <span class="scanning-icon">🔍</span>
+          <span class="scanning-icon"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg></span>
           <span class="scanning-title" id="scanningTitle">Starting task scan...</span>
         </div>
         <div class="scanning-progress-bar">
@@ -1370,7 +1429,7 @@ function renderEngineerMyWork() {
         ${working.length > 0 ? `
           <div class="eng-panel" style="border-left:4px solid #0c66e4; background:#f4f8ff;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-              <h3 style="margin:0; color:#0c66e4; font-size:14px;">⚡ Currently Working</h3>
+              <h3 style="margin:0; color:#0c66e4; font-size:14px; display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Currently Working</h3>
               <span class="tp-status-chip working" style="animation: tp-pulse 1.6s ease infinite;">● Live</span>
             </div>
             <div style="display:grid; gap:8px;">
@@ -1397,7 +1456,7 @@ function renderEngineerMyWork() {
         ${completed.length > 0 ? `
           <div class="eng-panel" style="border-left:4px solid #22a06b; background:#f4fff9;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-              <h3 style="margin:0; color:#22a06b; font-size:14px;">✅ Completed Today</h3>
+              <h3 style="margin:0; color:#22a06b; font-size:14px; display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Completed Today</h3>
               <span style="font-size:11px; font-weight:700; color:#216e4e; background:#dcfff1; padding:3px 8px; border-radius:10px;">${completed.length} tasks</span>
             </div>
             <div style="display:grid; gap:6px; max-height:240px; overflow-y:auto;">
@@ -1413,7 +1472,7 @@ function renderEngineerMyWork() {
                 </div>`).join("")}
             </div>
             <div style="margin-top:10px; text-align:right;">
-              <button class="secondary" style="font-size:11px; padding:5px 12px;" id="generateDailyReportBtnMyWork">📄 View Daily Report</button>
+              <button class="secondary" style="font-size:11px; padding:5px 12px; display:inline-flex;align-items:center;gap:5px;" id="generateDailyReportBtnMyWork"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg> View Daily Report</button>
             </div>
           </div>
         ` : ""}
@@ -1427,7 +1486,7 @@ function renderEngineerMyWork() {
 function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
   const insights = datasetInsights();
   const tasks = filteredTasks();
-  const displayedTasks = tasks.slice(0, 4);
+  const displayedTasks = tasks.slice(0, 6);
   const newAssigned = engineerPortalPosts.filter(p => !p.viewed);
   return `
     <div class="engineer-dashboard-shell">
@@ -1443,7 +1502,7 @@ function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
       <!-- Live Scanning Control -->
       <div style="display: flex; justify-content: flex-end; margin-bottom: 12px;">
         <button class="primary" id="btnStartScanning" style="background: linear-gradient(135deg, #0c66e4, #579dff); color: white; padding: 8px 16px; border-radius: 8px; border: none; font-size: 13px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: all 0.2s ease; box-shadow: 0 2px 8px rgba(12, 102, 228, 0.2);">
-          <span>🔍</span> Scan Tasks Now
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> Scan Tasks Now
         </button>
       </div>
       
@@ -1488,7 +1547,7 @@ function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
           <div style="display:grid;gap:12px;">
             ${tasks.length === 0
               ? `<div style="padding:48px;text-align:center;background:#fff;border-radius:8px;border:1px solid #dfe3ea;">
-                  <h3 style="margin:0 0 6px;color:#22a06b;">🎉 Queue Fully Cleared!</h3>
+                  <h3 style="margin:0 0 6px;color:#22a06b;display:inline-flex;align-items:center;gap:6px;"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Queue Fully Cleared!</h3>
                   <p style="font-size:13px;color:#626f86;margin:0;">No outstanding priorities remain. Great work today!</p>
                  </div>`
               : displayedTasks.map((t, index) => {
@@ -1499,15 +1558,15 @@ function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
                         <div class="hero-header">
                           <span class="focus-pulse-dot"></span>
                           <span class="severity ${t.severity.toLowerCase()}">${t.severity}</span>
-                          <span class="focus-pill-label">🔥 HIGH FOCUS</span>
+                          <span class="focus-pill-label" style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#de350b;"></span> HIGH FOCUS</span>
                         </div>
                         <div class="eng-task-body">
                           <strong class="hero-title">${escapeHtml(t.canonicalTitle)}${isAssigned ? '<span class="eng-assigned-tag">Manager</span>' : ""}</strong>
                           <p class="hero-subtitle">${escapeHtml(t.extraction)} · Correlated across ${t.sources.length} sources</p>
-                          <div class="hero-meta-grid">
-                            <span>📍 ${escapeHtml(t.sources.join(" + "))}</span>
-                            <span>⏱ ${t.execution?.estimatedMinutes ? `~${t.execution.estimatedMinutes} min` : `~${Math.max(15, Math.min(180, Math.round(t.score)))} min`}</span>
-                            <span>📅 Due ${formatDue(t.due)}</span>
+                          <div class="hero-meta-grid" style="display:flex;align-items:center;gap:12px;font-size:11px;color:#65717d;margin-top:8px;">
+                            <span style="display:inline-flex;align-items:center;gap:3px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg> ${escapeHtml(t.sources.join(" + "))}</span>
+                            <span style="display:inline-flex;align-items:center;gap:3px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> ${t.execution?.estimatedMinutes ? `~${t.execution.estimatedMinutes} min` : `~${Math.max(15, Math.min(180, Math.round(t.score)))} min`}</span>
+                            <span style="display:inline-flex;align-items:center;gap:3px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg> Due ${formatDue(t.due)}</span>
                           </div>
                         </div>
                         <div class="eng-task-score">
@@ -1522,8 +1581,8 @@ function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
                       <div class="eng-task-body">
                         <strong>${escapeHtml(t.canonicalTitle)}${isAssigned ? '<span class="eng-assigned-tag">Manager</span>' : ""}</strong>
                         <p>${escapeHtml(t.extraction)} · ${escapeHtml(t.aliases.join(", "))}</p>
-                        ${t.isBlocking ? `<span style="font-size:10px;background:#fff0b3;color:#974f0c;padding:1px 6px;border-radius:4px;font-weight:700;">⚠ Blocks ${t.blocksCount} task${t.blocksCount > 1 ? "s" : ""}</span>` : ""}
-                        ${t.isBlocked ? `<span style="font-size:10px;background:#ffd5d2;color:#de350b;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:4px;">🚧 Blocked</span>` : ""}
+                        ${t.isBlocking ? `<span style="font-size:10px;background:#fff0b3;color:#974f0c;padding:1px 6px;border-radius:4px;font-weight:700;display:inline-flex;align-items:center;gap:3px;"><svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg> Blocks ${t.blocksCount} task${t.blocksCount > 1 ? "s" : ""}</span>` : ""}
+                        ${t.isBlocked ? `<span style="font-size:10px;background:#ffd5d2;color:#de350b;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:4px;display:inline-flex;align-items:center;gap:3px;"><svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg> Blocked</span>` : ""}
                       </div>
                       <div class="eng-task-score">
                         <span>${t.score}</span>
@@ -1535,11 +1594,11 @@ function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
           ${tasks.length > 4 ? `
             <div style="margin-top: 8px; text-align: center;">
               <button class="primary" data-nav="today" style="background: linear-gradient(135deg, #152238, #1c2e4a); color: white; padding: 10px 20px; border-radius: 999px; border: none; font-size: 13px; font-weight: 800; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 12px rgba(21, 34, 56, 0.15); display: inline-flex; align-items: center; gap: 8px; width: 100%; justify-content: center;">
-                <span>📋</span> View Today's Full Queue (${tasks.length} items)
+                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg> View Today's Full Queue (${tasks.length} items)
               </button>
             </div>
           ` : ""}
-          ${todayQueueGeminiScored ? `<div style="font-size:10px;color:#22a06b;text-align:center;margin-top:4px;">✨ Gemini AI ranked</div>` : `<div style="font-size:10px;color:#94a3b8;text-align:center;margin-top:4px;">⏳ AI ranking in progress…</div>`}
+          ${todayQueueGeminiScored ? `<div style="font-size:10px;color:#22a06b;text-align:center;margin-top:4px;">Gemini AI ranked</div>` : `<div style="font-size:10px;color:#94a3b8;text-align:center;margin-top:4px;">AI ranking in progress…</div>`}
         </div>
         <div class="eng-sidebar">
           <div class="eng-panel exec-brief">
@@ -1555,7 +1614,7 @@ function renderEngineerDashboard(selected, executionBrief, dynamicPlan) {
           <div class="eng-panel exec-brief" style="border-left-color:#0c66e4;">
             <h3>Execution brief</h3>
             <p style="font-size:12px;color:#44546f;margin:0 0 6px;">${executionBrief?.definitionOfDone || "Select a task"}</p>
-            <span class="timeline-pill" style="font-size:11px;">⏱ ${executionBrief?.timeline || "—"}</span>
+            <span class="timeline-pill" style="font-size:11px; display:inline-flex;align-items:center;gap:3px;"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>${executionBrief?.timeline || "—"}</span>
             <div class="eng-checklist">
               ${executionBrief ? executionBrief.process.slice(0,4).map((s,i)=>`
                 <label class="eng-checklist-item"><input type="checkbox" data-execution-step-idx="${i}"><span>${escapeHtml(s)}</span></label>
@@ -1694,7 +1753,7 @@ function renderEngineerCalendar() {
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
         <div>
           <p class="eyebrow">Personal Weekly View</p>
-          <h1 style="margin:2px 0 0;font-size:26px;color:#172b4d;font-weight:800;">📆 ${escapeHtml(myName)}'s Calendar</h1>
+          <h1 style="margin:2px 0 0;font-size:26px;color:#172b4d;font-weight:800;display:flex;align-items:center;gap:10px;"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>${escapeHtml(myName)}'s Calendar</h1>
           <p style="font-size:13px;color:#626f86;margin:4px 0 0;">
             ${weeklySchedule.length} tasks scheduled for this week · ${completedToday} completed today
           </p>
@@ -1708,7 +1767,7 @@ function renderEngineerCalendar() {
 
       <!-- Weekly Schedule Grid -->
       <div style="margin-bottom: 24px;">
-        <h3 style="margin: 0 0 12px 0; color: #172b4d; font-size: 15px; font-weight: 700;">📅 Weekly Load &amp; Schedule</h3>
+        <h3 style="margin: 0 0 12px 0; color: #172b4d; font-size: 15px; font-weight: 700; display:flex;align-items:center;gap:8px;"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>Weekly Load &amp; Schedule</h3>
         <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:10px;">
           ${days.map(day => {
             const label = new Date(day + "T12:00:00").toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
@@ -1775,14 +1834,14 @@ function renderEngineerCalendar() {
       <!-- Today's Capacity Status -->
       <div style="background:#fffbeb;border:2px solid #f0b054;border-radius:12px;padding:16px;margin-bottom:24px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-          <div style="font-size:13px;font-weight:700;color:#b7600a;">📊 Today's Capacity Status</div>
+          <div style="font-size:13px;font-weight:700;color:#b7600a;display:flex;align-items:center;gap:6px;"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>Today's Capacity Status</div>
           <div style="font-size:12px;color:#626f86;">${Math.round(totalEstMin/450*100)}% of 7.5 hours</div>
         </div>
         <div style="height:8px;background:#f0f2f5;border-radius:999px;overflow:hidden;">
           <div style="width:${Math.min(100, Math.round(totalEstMin/450*100))}%;height:100%;background:${totalEstMin >= 450 ? "#c0392b" : totalEstMin >= 300 ? "#b7600a" : "#0f766e"};border-radius:inherit;transition:width .3s ease;"></div>
         </div>
         <div style="font-size:11px;color:#626f86;margin-top:6px;">
-          ${totalEstMin >= 450 ? "⚠️ At full capacity" : totalEstMin >= 300 ? "✅ Healthy workload" : "💡 Light day"}
+          ${totalEstMin >= 450 ? "At full capacity" : totalEstMin >= 300 ? "Healthy workload" : "Light day"}
           · ${Math.round(totalEstMin/60*10)/10}h scheduled out of 7.5h available today
         </div>
       </div>
@@ -1791,7 +1850,7 @@ function renderEngineerCalendar() {
       <div style="display:grid;gap:12px;margin-bottom:24px;">
         ${scheduled.length === 0
           ? `<div style="background:#fff;border:1.5px solid #e8ecf1;border-radius:12px;padding:32px;text-align:center;">
-               <div style="font-size:48px;margin-bottom:12px;">🎉</div>
+               <div style="display:flex;justify-content:center;margin-bottom:12px;color:#22a06b;"><svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
                <div style="font-size:16px;font-weight:700;color:#172b4d;margin-bottom:6px;">All Caught Up!</div>
                <div style="font-size:13px;color:#626f86;">No tasks scheduled for today. Great work!</div>
              </div>`
@@ -1805,13 +1864,13 @@ function renderEngineerCalendar() {
                       <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
                         <span style="font-size:10px;font-weight:800;padding:3px 7px;border-radius:5px;background:${SEV_BG[sl.task.severity]};color:${SEV_CLR[sl.task.severity]};">${sl.task.severity}</span>
                         <span style="font-size:11px;color:#626f86;">~${sl.estMin>=60?Math.round(sl.estMin/60*10)/10+"h":sl.estMin+"m"}</span>
-                        ${isDone?`<span style="font-size:11px;color:#22a06b;font-weight:700;">✓ Done</span>`:""}
-                        ${isWorking?`<span style="font-size:11px;color:#0f766e;font-weight:700;">● Active</span>`:""}
+                        ${isDone?`<span style="font-size:11px;color:#22a06b;font-weight:700;">Done</span>`:""}
+                        ${isWorking?`<span style="font-size:11px;color:#0f766e;font-weight:700;">Active</span>`:""}
                       </div>
                       <div style="font-size:14px;font-weight:700;color:${isDone?"#94a3b8":"#172b4d"};margin-bottom:6px;${isDone?"text-decoration:line-through;":""}">${escapeHtml(sl.task.canonicalTitle)}</div>
                       <div style="font-size:12px;color:#626f86;line-height:1.5;">
-                        ${sl.task.due ? `📅 Due: ${formatDue(sl.task.due)}` : "No deadline"}
-                        ${sl.task.sources.length > 0 ? ` · 🔗 ${sl.task.sources.join(", ")}` : ""}
+                        ${sl.task.due ? `Due: ${formatDue(sl.task.due)}` : "No deadline"}
+                        ${sl.task.sources.length > 0 ? ` · ${sl.task.sources.join(", ")}` : ""}
                       </div>
                     </div>
                   </div>
@@ -1837,7 +1896,7 @@ function renderEngineerCalendar() {
         return `
           <div style="background:#fff;border:1.5px solid #e8ecf1;border-radius:12px;overflow:hidden;margin-bottom:24px;">
             <div style="padding:14px 16px;border-bottom:1px solid #f0f2f5;display:flex;justify-content:space-between;align-items:center;">
-              <h3 style="margin:0;font-size:15px;color:#172b4d;">📅 Upcoming Meetings</h3>
+              <h3 style="margin:0;font-size:15px;color:#172b4d;display:flex;align-items:center;gap:8px;"><svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>Upcoming Meetings</h3>
               <span style="font-size:12px;color:#626f86;">${upcomingMeetings.length} meeting${upcomingMeetings.length !== 1 ? "s" : ""}</span>
             </div>
             <div style="padding:12px;display:grid;gap:10px;">
@@ -1866,14 +1925,14 @@ function renderEngineerCalendar() {
                       <button class="secondary" style="font-size:11px;padding:5px 12px;" 
                               data-meeting-analyze="${m.id}" 
                               onclick="event.stopPropagation(); document.querySelector('[data-meeting-analyze=\\\"${m.id}\\\"]').click();">
-                        🧠 Analyze with AI
+                        Analyze with AI
                       </button>
                       ${m.savedToCalendar || m.status === "Scheduled" 
                         ? `<span style="font-size:11px;color:#15803d;font-weight:600;">✓ On Calendar</span>` 
                         : `<button class="primary" style="font-size:11px;padding:5px 12px;background:#0ea5e9;" 
                                   data-save-meeting="${m.id}" 
                                   onclick="event.stopPropagation();">
-                            📅 Add to Calendar
+                            Add to Calendar
                           </button>`
                       }
                     </div>
@@ -1931,7 +1990,7 @@ function renderCalendarTaskDetails(task, engineers) {
   if (!task) {
     return `
       <div style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:24px; text-align:center; color:#64748b; box-shadow:0 4px 20px rgba(0,0,0,0.03); min-height:400px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px;">
-        <span style="font-size:40px; margin-bottom:8px;">🎯</span>
+        <span style="display:flex;justify-content:center;color:#94a3b8;"><svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg></span>
         <h3 style="font-size:15px; color:#1e293b; margin:0; font-weight:700;">No Task Selected</h3>
         <p style="font-size:12px; color:#64748b; max-width:240px; margin:0; line-height:1.5;">
           Click on any task block in the weekly calendar grid to reassign, adjust priority, or view detailed AI metrics.
@@ -2049,10 +2108,22 @@ function renderDiscordUserPanel() {
       </div>
 
       <!-- Decorative and Controls -->
-      <div style="display:flex; align-items:center; gap:4px; color:#475569;">
-        <button style="background:none; border:none; padding:4px; cursor:pointer; font-size:14px; opacity:0.75;" onclick="alert('Mic muted');" title="Mute Mic">🎙️</button>
-        <button style="background:none; border:none; padding:4px; cursor:pointer; font-size:14px; opacity:0.75;" onclick="alert('Audio deafened');" title="Deafen Audio">🎧</button>
-        <button style="background:none; border:none; padding:4px; cursor:pointer; font-size:14px; opacity:0.75;" id="panelSettingsBtn" title="Settings">⚙️</button>
+      <div style="display:flex; align-items:center; gap:6px; color:#475569;" class="user-panel-controls">
+        <button class="theme-toggle-btn" id="themeToggleBtn" title="Toggle Theme" style="background:none; border:none; padding:4px; cursor:pointer; opacity:0.75; display:flex; align-items:center; justify-content:center;">
+          ${activeTheme === "light"
+            ? `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>`
+            : `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m0-12.728l.707.707m11.314 11.314l.707.707M12 17a5 5 0 100-10 5 5 0 000 10z"/></svg>`
+          }
+        </button>
+        <button style="background:none; border:none; padding:4px; cursor:pointer; opacity:0.75; display:flex; align-items:center; justify-content:center;" onclick="alert('Mic muted');" title="Mute Mic">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+        </button>
+        <button style="background:none; border:none; padding:4px; cursor:pointer; opacity:0.75; display:flex; align-items:center; justify-content:center;" onclick="alert('Audio deafened');" title="Deafen Audio">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.5a6.5 6.5 0 01-6.5-6.5V7.5a6.5 6.5 0 0113 0v4.5a6.5 6.5 0 01-6.5 6.5zm-6.5-6.5h13M5.5 12h13"/></svg>
+        </button>
+        <button style="background:none; border:none; padding:4px; cursor:pointer; opacity:0.75; display:flex; align-items:center; justify-content:center;" id="panelSettingsBtn" title="Settings">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        </button>
       </div>
 
       <!-- Popup selector menu -->
@@ -2116,7 +2187,7 @@ function renderChatPage() {
       <div id="chatMessagesArea" style="flex:1; background:#fff; border:1px solid #ded5c8; border-radius:16px; padding:20px; overflow-y:auto; display:flex; flex-direction:column; gap:16px; box-shadow:0 4px 12px rgba(0,0,0,0.015);">
         ${chatMessages.length === 0 ? `
           <div style="margin:auto; text-align:center; color:#94a3b8; max-width:320px; display:flex; flex-direction:column; align-items:center; gap:12px;">
-            <span style="font-size:48px;">💬</span>
+            <span style="display:flex;justify-content:center;color:#94a3b8;"><svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg></span>
             <h3 style="margin:0; font-size:15px; color:#475569; font-weight:700;">No Messages Yet</h3>
             <p style="margin:0; font-size:12px; line-height:1.5;">Start the conversation below! Tasks completed by the engineer will automatically notify the manager here.</p>
           </div>
@@ -2128,7 +2199,7 @@ function renderChatPage() {
           if (isSystem) {
             return `
               <div style="background:#f0fdf4; border:1px dashed #bbf7d0; border-radius:12px; padding:10px 16px; font-size:12.5px; color:#166534; display:flex; align-items:center; gap:10px; align-self:center; max-width:85%;">
-                <span style="font-size:15px;">🤖</span>
+                <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#dff6e9;"><svg width="13" height="13" fill="none" stroke="#18745f" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg></span>
                 <span style="font-weight:600; line-height:1.4;">${msg.text}</span>
                 <span style="font-size:10px; color:#85a894; margin-left:8px; font-weight:500;">${timeStr}</span>
               </div>
@@ -2163,7 +2234,7 @@ function renderChatPage() {
                   <!-- File Attachment -->
                   ${msg.fileData ? `
                     <div class="chat-file-card" style="margin-top:8px; background:${isMe ? 'rgba(255,255,255,0.1)' : '#fff'}; border:1px solid ${isMe ? 'rgba(255,255,255,0.2)' : '#e2e8f0'}; border-radius:8px; padding:8px 12px; display:flex; align-items:center; gap:10px; min-width:200px;">
-                      <span style="font-size:24px;">📕</span>
+                      <span style="display:flex;justify-content:center;color:#cbd5e1;"><svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg></span>
                       <div style="flex:1; min-width:0; line-height:1.25;">
                         <div style="font-size:12px; font-weight:700; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; color:${isMe ? '#fff' : '#1e293b'};">${escapeHtml(msg.fileData.name)}</div>
                         <div style="font-size:10px; color:${isMe ? '#cbd5e1' : '#64748b'};">${msg.fileData.type || 'Document'}</div>
@@ -2197,10 +2268,10 @@ function renderChatPage() {
           <div style="display:flex; gap:8px;">
             <input type="file" id="chatFileInput" style="display:none;" accept=".pdf,.txt,.doc,.docx,.png,.jpg">
             <button id="attachFileBtn" style="background:#f1f5f9; border:none; color:#475569; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:700; display:flex; align-items:center; gap:6px; cursor:pointer;" title="Attach File/PDF">
-              <span>📎</span> Attach File
+              <span><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg></span> Attach File
             </button>
             <button id="quickAttachReportBtn" style="background:#f1f5f9; border:none; color:#0f766e; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:700; display:flex; align-items:center; gap:6px; cursor:pointer;" title="Auto-generate and attach sprint summary PDF">
-              <span>📊</span> Quick Attach EOD PDF
+              <span><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg></span> Quick Attach EOD PDF
             </button>
           </div>
           <div style="font-size:11px; color:#94a3b8; font-weight:500;">
@@ -2244,7 +2315,7 @@ function renderFilePreviewModal() {
         <div style="flex:1; overflow-y:auto; padding:20px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:12px; font-family:'Inter', sans-serif; font-size:13px; line-height:1.6; color:#334155;">
           ${msg.fileData.name.endsWith(".pdf") ? `
             <div style="border-bottom:2px solid #ef4444; padding-bottom:12px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-size:18px; font-weight:900; color:#ef4444;">📕 PDF DOCUMENT</span>
+              <span style="font-size:14px; font-weight:900; color:#ef4444; display:inline-flex;align-items:center;gap:6px;"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>PDF DOCUMENT</span>
               <span style="font-size:11px; color:#64748b; font-weight:700;">TaskPilot Auto-Report</span>
             </div>
             <h2 style="margin:0 0 16px 0; font-size:18px; font-weight:800; color:#0f172a; font-family:'Outfit', sans-serif;">End of Day (EOD) Sprint Summary Report</h2>
@@ -2277,7 +2348,7 @@ function renderFilePreviewModal() {
         <!-- Footer Actions -->
         <div style="display:flex; justify-content:flex-end; gap:10px; flex-shrink:0; border-top:1px solid #f1f5f9; padding-top:12px;">
           <a href="${msg.fileData.dataUrl || '#'}" download="${msg.fileData.name}" style="text-decoration:none; background:#10b981; color:#fff; font-size:12px; padding:8px 16px; border-radius:8px; font-weight:800; display:flex; align-items:center; gap:6px;">
-            📥 Download Document
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Download Document
           </a>
           <button class="secondary" id="closePreviewModalBtn2" style="font-size:12px; padding:8px 16px; border-radius:8px;">
             Close
@@ -2429,8 +2500,8 @@ function renderCalendarTaskModal() {
           <h4 style="margin:0 0 8px; font-size:15px; color:#0f172a; font-weight:700; line-height:1.4;">${escapeHtml(task.canonicalTitle || task.title)}</h4>
           <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
             <span style="font-size:9px; font-weight:800; padding:2.5px 7px; border-radius:5px; background:${SEV_BG[task.severity] || "#f1f5f9"}; color:${SEV_COLOR[task.severity] || "#475569"};">${task.severity}</span>
-            <span style="font-size:10px; font-weight:600; padding:2.5px 7px; border-radius:5px; background:#f1f5f9; color:#475569;">📅 Due ${formatDue(task.due)}</span>
-            <span style="font-size:10px; font-weight:600; padding:2.5px 7px; border-radius:5px; background:#f1f5f9; color:#475569;">⭐ Priority Score ${task.score}</span>
+            <span style="font-size:10px; font-weight:600; padding:2.5px 7px; border-radius:5px; background:#f1f5f9; color:#475569;">Due ${formatDue(task.due)}</span>
+            <span style="font-size:10px; font-weight:600; padding:2.5px 7px; border-radius:5px; background:#f1f5f9; color:#475569;">Priority Score ${task.score}</span>
             ${isDone ? `<span style="font-size:10px; font-weight:700; padding:2.5px 7px; border-radius:5px; background:#dcfce7; color:#166534;">✓ Completed</span>` : ""}
           </div>
           <p style="font-size:12.5px; color:#475569; margin:0; line-height:1.55;">${escapeHtml(task.body || task.description || "No description provided.")}</p>
@@ -2439,9 +2510,9 @@ function renderCalendarTaskModal() {
         <!-- Working & Appointment Status -->
         <div style="background:#f8fafc; border-radius:12px; padding:14px; border:1px solid #e2e8f0; display:grid; gap:10px;">
           <div style="display:flex; align-items:center; justify-content:space-between;">
-            <span style="font-size:12px; font-weight:700; color:#475569;">👤 Assigned Engineer:</span>
+            <span style="font-size:12px; font-weight:700; color:#475569; display:inline-flex;align-items:center;gap:4px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg> Assigned Engineer:</span>
             <span style="font-size:12.5px; font-weight:800; color:#0f172a;">
-              ${currentOwner !== "Unassigned" && currentOwner !== "" ? `👤 ${currentOwner}` : "⚠️ Unassigned"}
+              ${currentOwner !== "Unassigned" && currentOwner !== "" ? currentOwner : "Unassigned"}
             </span>
           </div>
           <div style="display:flex; align-items:center; justify-content:space-between;">
@@ -2702,8 +2773,8 @@ function renderCalendarAI() {
       <!-- Top banner / header -->
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; background:linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding:24px; border-radius:18px; color:#fff; box-shadow:0 12px 30px -5px rgba(15,23,42,0.15); border:1px solid rgba(255,255,255,0.05);">
         <div style="flex:1;">
-          <span style="font-size:10px; font-weight:850; text-transform:uppercase; letter-spacing:0.15em; color:#38bdf8; background:#38bdf81e; padding:5px 12px; border-radius:999px;">🤖 AI-Optimized Resource Planning</span>
-          <h1 style="margin:10px 0 4px; font-size:30px; color:#fff; font-weight:800; font-family:'Outfit', sans-serif; letter-spacing:-0.02em;">📆 CalendarAI</h1>
+          <span style="font-size:10px; font-weight:850; text-transform:uppercase; letter-spacing:0.15em; color:#38bdf8; background:#38bdf81e; padding:5px 12px; border-radius:999px; display:inline-flex; align-items:center; gap:4px;"><svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 21L8.188 15.904L3 15L8.188 14.096L9 9L9.813 14.096L15 15L9.813 15.904Z"/></svg> AI-Optimized Resource Planning</span>
+          <h1 style="margin:10px 0 4px; font-size:30px; color:#fff; font-weight:800; font-family:'Outfit', sans-serif; letter-spacing:-0.02em;">CalendarAI</h1>
           <p style="font-size:13.5px; color:#94a3b8; margin:0;">
             Auto-allocates tasks across ${engineers.length} engineers based on deadlines, severity, workload, and historical velocity.
           </p>
@@ -2728,18 +2799,18 @@ function renderCalendarAI() {
         </div>
         <div style="display:flex; gap:12px; align-items:center;">
           <div style="display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.08); padding:8px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.15);">
-            <label for="calendarEngineerFilter" style="font-size:12px; font-weight:800; color:#fff; white-space:nowrap;">👤 Filter:</label>
+            <label for="calendarEngineerFilter" style="font-size:12px; font-weight:800; color:#fff; white-space:nowrap; display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg> Filter:</label>
             <select id="calendarEngineerFilter" style="background:transparent; color:#fff; border:none; font-size:12.5px; font-weight:700; outline:none; cursor:pointer;">
               <option value="" style="color:#000;" ${!calendarSelectedEngineer ? "selected" : ""}>Show All Engineers</option>
               ${engineers.map(eng => {
                 const summary = getEngineerStatusSummary(eng);
-                const statusStr = summary.canBeAssigned ? "🟢 Avail" : "🔴 Full";
+                const statusStr = summary.canBeAssigned ? "Avail" : "Full";
                 return `<option value="${eng}" style="color:#000;" ${calendarSelectedEngineer === eng ? "selected" : ""}>${eng} (${summary.tasksCount} tasks, ${statusStr})</option>`;
               }).join("")}
             </select>
           </div>
           <button class="primary" id="optimizeScheduleBtn" style="background:linear-gradient(135deg, #38bdf8 0%, #0284c7 100%); color:#fff; font-size:12px; font-weight:800; display:flex; align-items:center; gap:8px; padding:12px 22px; border-radius:10px; border:none; box-shadow:0 4px 16px rgba(56, 189, 248, 0.35); cursor:pointer; transition:all 0.2s;">
-            <span>🤖</span> Auto-Assign Tasks
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Auto-Assign Tasks
           </button>
         </div>
       </div>
@@ -2763,8 +2834,8 @@ function renderCalendarAI() {
                 const fontW = isSelected ? "800" : "700";
                 const summary = getEngineerStatusSummary(s.engineer);
                 const capacityBadge = summary.canBeAssigned 
-                  ? `<span style="font-size:9.5px; color:#0f766e; background:#ccfbf1; padding:1px 6px; border-radius:999px; margin-left:4px; font-weight:800;">🟢 Available</span>`
-                  : `<span style="font-size:9.5px; color:#b91c1c; background:#fee2e2; padding:1px 6px; border-radius:999px; margin-left:4px; font-weight:800;">🔴 At Capacity</span>`;
+                  ? `<span style="font-size:9.5px; color:#0f766e; background:#ccfbf1; padding:1px 6px; border-radius:999px; margin-left:4px; font-weight:800; display:inline-flex;align-items:center;gap:3px;"><span style="width:6px;height:6px;border-radius:50%;background:#0d9488;display:inline-block;"></span>Available</span>`
+                  : `<span style="font-size:9.5px; color:#b91c1c; background:#fee2e2; padding:1px 6px; border-radius:999px; margin-left:4px; font-weight:800; display:inline-flex;align-items:center;gap:3px;"><span style="width:6px;height:6px;border-radius:50%;background:#ef4444;display:inline-block;"></span>At Capacity</span>`;
                 
                 return `
                   <div class="cal-legend-chip" data-engineer="${s.engineer}" style="background:${bg}; border:${border};">
@@ -2812,7 +2883,7 @@ function renderCalendarAI() {
                   <div style="background:${summary.canBeAssigned ? "#ecfdf5" : "#fef2f2"}; border:1px solid ${summary.canBeAssigned ? "#10b98133" : "#ef444433"}; padding:8px 12px; border-radius:10px; text-align:center;">
                     <div style="font-size:10px; font-weight:800; color:${summary.canBeAssigned ? "#047857" : "#b91c1c"}; text-transform:uppercase; letter-spacing:0.04em;">Ready for Tasks?</div>
                     <div style="font-size:12.5px; font-weight:800; color:${summary.canBeAssigned ? "#065f46" : "#991b1b"}; margin-top:2px;">
-                      ${summary.canBeAssigned ? "🟢 Yes (Available)" : "🔴 No (At Capacity)"}
+                      ${summary.canBeAssigned ? "Yes (Available)" : "No (At Capacity)"}
                     </div>
                   </div>
                 </div>
@@ -2888,7 +2959,7 @@ function renderCalendarAI() {
             return `
               <div style="background:#fffaf8; border:1px solid #fed7aa; border-left:4px solid #f97316; border-radius:16px; padding:20px; box-shadow:0 4px 14px rgba(249, 115, 22, 0.05);">
                 <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
-                  <span style="font-size:22px;">⚠️</span>
+                  <span style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:#fed7aa;flex-shrink:0;"><svg width="18" height="18" fill="none" stroke="#c2410c" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg></span>
                   <div>
                     <h3 style="margin:0; font-size:15px; color:#c2410c; font-weight:800;">Capacity Overflow</h3>
                     <p style="margin:2px 0 0; font-size:12px; color:#9a3412;">
@@ -2915,7 +2986,7 @@ function renderCalendarAI() {
                   }).join("")}
                 </div>
                 <div style="margin-top:14px; padding:12px 14px; background:#fffdf5; border:1px dashed #fcd34d; border-radius:10px; font-size:11.5px; color:#78350f; line-height:1.55; display:flex; align-items:flex-start; gap:8px;">
-                  <span>💡</span>
+                  <span style="display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="14" height="14" fill="none" stroke="#92400e" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg></span>
                   <span><strong>Recommendation:</strong> Consider redistributing these tasks, extending the sprint, or bringing in additional resources to meet deadlines.</span>
                 </div>
               </div>
@@ -3161,7 +3232,7 @@ function renderProjectGenomePage() {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
         <div>
           <h1 style="margin:0;font-size:22px;color:#172b4d;display:flex;align-items:center;gap:10px;">
-            🧬 Project Genome &amp; Mutation Predictor
+            Project Genome &amp; Mutation Predictor
           </h1>
           <p style="margin:4px 0 0;font-size:13px;color:#626f86;">
             Reads your sprint's DNA, compares it to past sprints, and predicts problems before they happen.
@@ -3175,24 +3246,24 @@ function renderProjectGenomePage() {
         >
           ${g.loading
             ? `<span style="display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.7s linear infinite;"></span> Analyzing...`
-            : `🧬 ${current ? "Re-Analyze Sprint" : "Analyze Sprint"}`}
+            : `${current ? "Re-Analyze Sprint" : "Analyze Sprint"}`}
         </button>
       </div>
 
       ${!current ? `
         <!-- Empty state -->
         <div style="text-align:center;padding:60px 20px;background:#f8f9fa;border-radius:12px;border:2px dashed #dfe3ea;">
-          <div style="font-size:48px;margin-bottom:16px;">🧬</div>
+          <div style="display:flex;justify-content:center;margin-bottom:16px;color:#0c66e4;"><svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/></svg></div>
           <h2 style="color:#172b4d;margin:0 0 8px;">Your sprint has no genome yet</h2>
           <p style="color:#626f86;max-width:480px;margin:0 auto 20px;">Click "Analyze Sprint" to build a genetic fingerprint of the current sprint and compare it against historical patterns to predict risks.</p>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:540px;margin:0 auto;text-align:left;">
             ${[
-              { icon:"📥", title:"Data Sources", desc:"Jira, GitHub, Slack, Emails, Meetings" },
-              { icon:"🔬", title:"Feature Extraction", desc:"Workload, bugs, dependencies, reviews" },
-              { icon:"🎯", title:"Risk Prediction", desc:"Bottlenecks, overload, delays — with %s" }
+              { icon:`<svg width="20" height="20" fill="none" stroke="#0c66e4" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>`, title:"Data Sources", desc:"Jira, GitHub, Slack, Emails, Meetings" },
+              { icon:`<svg width="20" height="20" fill="none" stroke="#6554c0" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/></svg>`, title:"Feature Extraction", desc:"Workload, bugs, dependencies, reviews" },
+              { icon:`<svg width="20" height="20" fill="none" stroke="#de350b" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>`, title:"Risk Prediction", desc:"Bottlenecks, overload, delays — with %s" }
             ].map(s => `
               <div style="background:#fff;border:1px solid #dfe3ea;border-radius:8px;padding:12px;">
-                <div style="font-size:22px;">${s.icon}</div>
+                <div style="margin-bottom:6px;">${s.icon}</div>
                 <strong style="font-size:12px;color:#172b4d;">${s.title}</strong>
                 <p style="font-size:11px;color:#626f86;margin:4px 0 0;">${s.desc}</p>
               </div>
@@ -3207,7 +3278,7 @@ function renderProjectGenomePage() {
             { label:"Similarity to past sprint", value:`${g.similarityScore}%`, sub: matched ? `vs ${matched.sprintLabel}` : "", color: g.similarityScore >= 80 ? "#de350b" : g.similarityScore >= 60 ? "#974f0c" : "#22a06b" },
             { label:"Mutations detected", value: g.mutations.length, sub:"Changed signals", color:"#6554c0" },
             { label:"Predicted risks", value: g.risks.length, sub:"With confidence scores", color: g.risks.length > 2 ? "#de350b" : "#22a06b" },
-            { label:"Outcome prediction", value: matched?.outcome === "delayed" && g.similarityScore >= 70 ? "⚠️ At Risk" : "✅ On Track", sub:`Based on ${matched?.sprintLabel || "history"}`, color: matched?.outcome === "delayed" && g.similarityScore >= 70 ? "#de350b" : "#22a06b" }
+            { label:"Outcome prediction", value: matched?.outcome === "delayed" && g.similarityScore >= 70 ? "At Risk" : "On Track", sub:`Based on ${matched?.sprintLabel || "history"}`, color: matched?.outcome === "delayed" && g.similarityScore >= 70 ? "#de350b" : "#22a06b" }
           ].map(k => `
             <div style="background:#fff;border:1px solid #dfe3ea;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,0.05);">
               <p style="margin:0 0 4px;font-size:11px;color:#626f86;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">${k.label}</p>
@@ -3220,7 +3291,7 @@ function renderProjectGenomePage() {
         <!-- AI narrative (shown when available) -->
         ${g.aiNarrative ? `
           <div style="background:#f0f7ff;border:1px solid #b3d4ff;border-left:4px solid #0c66e4;border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;gap:12px;align-items:flex-start;">
-            <span style="font-size:20px;flex-shrink:0;">🤖</span>
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color:#0c66e4;flex-shrink:0;margin-top:2px;"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
             <div>
               <p style="margin:0 0 2px;font-size:12px;font-weight:700;color:#0c66e4;">TaskPilot AI Manager Briefing</p>
               <p style="margin:0;font-size:13px;color:#172b4d;line-height:1.5;">${escapeHtml(g.aiNarrative)}</p>
@@ -3232,17 +3303,17 @@ function renderProjectGenomePage() {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
           <!-- Current genome -->
           <div style="background:#fff;border:1px solid #dfe3ea;border-left:4px solid #0c66e4;border-radius:10px;padding:18px;">
-            <h3 style="margin:0 0 4px;font-size:14px;color:#172b4d;">🔵 Current Sprint Genome</h3>
+            <h3 style="margin:0 0 4px;font-size:14px;color:#172b4d;display:flex;align-items:center;gap:6px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#0c66e4;"></span> Current Sprint Genome</h3>
             <p style="margin:0 0 14px;font-size:11px;color:#626f86;">${current.workload} active tasks · velocity ${current.velocity}%</p>
             ${genomeBars(current, "#0c66e4")}
           </div>
           <!-- Matched genome -->
           <div style="background:#fff;border:1px solid #dfe3ea;border-left:4px solid ${matched?.outcome === "delayed" ? "#de350b" : "#22a06b"};border-radius:10px;padding:18px;">
-            <h3 style="margin:0 0 4px;font-size:14px;color:#172b4d;">
-              ${matched?.outcome === "delayed" ? "🔴" : "🟢"} ${matched?.sprintLabel || "Matched Sprint"} — ${g.similarityScore}% match
+            <h3 style="margin:0 0 4px;font-size:14px;color:#172b4d;display:flex;align-items:center;gap:6px;">
+              <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${matched?.outcome === "delayed" ? "#de350b" : "#22a06b"};"></span> ${matched?.sprintLabel || "Matched Sprint"} — ${g.similarityScore}% match
             </h3>
             <p style="margin:0 0 14px;font-size:11px;color:${matched?.outcome === "delayed" ? "#ae2a19" : "#216e4e"};font-weight:700;">
-              ${matched?.outcome === "delayed" ? "⚠️ This sprint ended delayed" : "✅ This sprint completed on time"}
+              ${matched?.outcome === "delayed" ? "This sprint ended delayed" : "This sprint completed on time"}
             </p>
             ${genomeBars(matched, matched?.outcome === "delayed" ? "#de350b" : "#22a06b")}
           </div>
@@ -3251,7 +3322,7 @@ function renderProjectGenomePage() {
         <!-- Mutation panel -->
         ${g.mutations.length > 0 ? `
           <div style="background:#fff;border:1px solid #dfe3ea;border-left:4px solid #6554c0;border-radius:10px;padding:18px;margin-bottom:20px;">
-            <h3 style="margin:0 0 12px;font-size:14px;color:#172b4d;">🔬 Mutation Detection — What's Different This Time</h3>
+            <h3 style="margin:0 0 12px;font-size:14px;color:#172b4d;display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/></svg>Mutation Detection — What's Different This Time</h3>
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">
               ${g.mutations.map(m => `
                 <div style="background:#f8f9fa;border-radius:8px;padding:12px;border:1px solid #dfe3ea;">
@@ -3276,7 +3347,7 @@ function renderProjectGenomePage() {
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
             <!-- Risks -->
             <div style="background:#fff;border:1px solid #dfe3ea;border-left:4px solid #de350b;border-radius:10px;padding:18px;">
-              <h3 style="margin:0 0 14px;font-size:14px;color:#172b4d;">⚠️ Predicted Risks</h3>
+              <h3 style="margin:0 0 14px;font-size:14px;color:#172b4d;display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="#de350b" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>Predicted Risks</h3>
               <div style="display:grid;gap:12px;">
                 ${g.risks.map(r => `
                   <div>
@@ -3293,7 +3364,7 @@ function renderProjectGenomePage() {
             </div>
             <!-- Recommendations -->
             <div style="background:#fff;border:1px solid #dfe3ea;border-left:4px solid #22a06b;border-radius:10px;padding:18px;">
-              <h3 style="margin:0 0 14px;font-size:14px;color:#172b4d;">✅ AI Recommendations</h3>
+              <h3 style="margin:0 0 14px;font-size:14px;color:#172b4d;display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="#22a06b" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>AI Recommendations</h3>
               <div style="display:grid;gap:10px;">
                 ${g.recommendations.map((rec, i) => `
                   <div style="display:flex;align-items:flex-start;gap:10px;padding:10px;background:#f4fff9;border:1px solid #b7e4ce;border-radius:8px;">
@@ -3308,7 +3379,7 @@ function renderProjectGenomePage() {
 
         <!-- Past sprints library -->
         <div style="background:#fff;border:1px solid #dfe3ea;border-radius:10px;padding:18px;">
-          <h3 style="margin:0 0 14px;font-size:14px;color:#172b4d;">📚 Genome Library — Historical Sprints</h3>
+          <h3 style="margin:0 0 14px;font-size:14px;color:#172b4d;display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>Genome Library — Historical Sprints</h3>
           <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
             ${g.pastGenomes.map(past => {
               const sim = computeGenomeSimilarity(current, past);
@@ -3353,7 +3424,7 @@ function renderManagerCommandStrip(selected) {
         <p>Highest risk: ${selected?.canonicalTitle || "None"}. Correlated across ${selected?.sources.length || 0} systems — needs manager visibility.</p>
       </article>
       <article class="hero-card" style="cursor:pointer;" data-nav="genome">
-        <p class="eyebrow">🧬 Sprint Genome</p>
+        <p class="eyebrow">Sprint Genome</p>
         <h2>${genomeReady ? `${similarityScore}% match` : "Analyze sprint"}</h2>
         <p>${genomeReady
           ? `Current sprint is ${similarityScore}% similar to a past sprint. ${topRisk ? `Top risk: ${topRisk.label} (${topRisk.pct}%).` : ""}`
@@ -3458,7 +3529,7 @@ function renderDependencyGraph() {
   const blockingRows = allBlockers.slice(0, 6).map(t => {
     const col = sevColor[t.severity] || "#626f86";
     return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:#fff8f0;border:1px solid #e8d5b7;border-left:3px solid ${col};border-radius:6px;margin:4px 0;">
-      <span style="font-size:16px;">🔴</span>
+      <span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;"><svg width="10" height="10" fill="#de350b" viewBox="0 0 10 10"><circle cx="5" cy="5" r="5"/></svg></span>
       <div style="flex:1;min-width:0;">
         <div style="font-size:12px;font-weight:700;color:#172b4d;">${escapeHtml(t.canonicalTitle)}</div>
         <div style="font-size:10px;color:#64748b;margin-top:1px;">
@@ -3509,12 +3580,13 @@ function renderDependencyGraph() {
       ${allBlocked.length > 0 ? `
         <div style="margin-top:${allBlockers.length > 0 ? "8px" : "0"};">
           <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:#0c66e4;margin-bottom:6px;">
-            🚧 Blocked (${allBlocked.length}) — waiting on decisions or other tasks
+            Blocked (${allBlocked.length}) — waiting on decisions or other tasks
           </div>
           ${blockedRows}
         </div>` : ""}
-      <div style="padding:8px 10px;background:#f8f5f0;border-radius:6px;font-size:11px;color:#64748b;border-left:3px solid #6554c0;">
-        💡 Resolving blocking tasks first will cascade ${allBlockers.reduce((s,t) => s + (t.blocksCount||1), 0)} downstream item${allBlockers.reduce((s,t) => s + (t.blocksCount||1), 0) !== 1 ? "s" : ""} into action automatically.
+      <div style="padding:8px 10px;background:#f8f5f0;border-radius:6px;font-size:11px;color:#64748b;border-left:3px solid #6554c0;display:flex;align-items:flex-start;gap:6px;">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="flex-shrink:0;margin-top:1px;"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+        Resolving blocking tasks first will cascade ${allBlockers.reduce((s,t) => s + (t.blocksCount||1), 0)} downstream item${allBlockers.reduce((s,t) => s + (t.blocksCount||1), 0) !== 1 ? "s" : ""} into action automatically.
       </div>
     </div>`;
 }
@@ -3560,7 +3632,7 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
         <div class="mgr-panel" style="border-left: 4px solid #22a06b; display:flex; flex-direction:column; justify-content:space-between;">
           <div>
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-              <h3 style="margin:0;">📅 Meetings Intelligence</h3>
+              <h3 style="margin:0;display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>Meetings Intelligence</h3>
               <button class="secondary" style="font-size:11px; padding:4px 10px;" data-nav="meetings">Go to Meetings →</button>
             </div>
             <div style="display:grid; gap:8px; max-height:220px; overflow-y:auto;">
@@ -3569,7 +3641,7 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
                   <div>
                     <strong style="color:#172b4d; font-size:13px;">${escapeHtml(m.title)}</strong>
                     <div style="font-size:11px; color:#626f86; margin-top:2px;">
-                      🕒 ${m.suggestedDate} ${m.suggestedTime || ""} · 👤 ${m.attendees?.join(", ") || "No attendees"}
+                      ${m.suggestedDate} ${m.suggestedTime || ""} · ${m.attendees?.join(", ") || "No attendees"}
                     </div>
                     ${m.agenda ? `<div style="font-size:11px; color:#44546f; margin-top:4px; font-style:italic;">"${escapeHtml(m.agenda)}"</div>` : ""}
                   </div>
@@ -3587,7 +3659,7 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
         <div class="mgr-panel" style="border-left: 4px solid #0c66e4; display:flex; flex-direction:column; justify-content:space-between;">
           <div>
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-              <h3 style="margin:0;">🔌 Connected Sources</h3>
+              <h3 style="margin:0;display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>Connected Sources</h3>
               <button class="secondary" style="font-size:11px; padding:4px 10px;" data-nav="inbox">All Sources →</button>
             </div>
             <div style="display:grid; gap:8px;">
@@ -3628,7 +3700,7 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
         <!-- Engineer Presence Tracker Card -->
         <div class="mgr-panel" style="border-left: 4px solid #7c3aed; display:flex; flex-direction:column; justify-content:space-between;">
           <div>
-            <h3 style="margin:0 0 12px 0;">👤 Team Presence</h3>
+            <h3 style="margin:0 0 12px 0;display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>Team Presence</h3>
             
             ${(() => {
               // Build list of all engineers from presenceAllUsers + prioritized task owners
@@ -3672,7 +3744,7 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
                         <span style="font-size:10px; font-weight:700; color:${statusColor}; background:${statusColor}18; padding:1px 6px; border-radius:999px;">${statusLabel}</span>
                       </div>
                       <div style="font-size:10px; color:#94a3b8; margin-top:1px;">
-                        ${status === "online" || status === "dnd" ? "🟢 Active now" : `Last seen: ${formatLastSeen(lastSeen)}`}
+                        ${status === "online" || status === "dnd" ? `<span style="display:inline-flex;align-items:center;gap:3px;"><span style="width:6px;height:6px;border-radius:50%;background:#22a06b;display:inline-block;"></span>Active now</span>` : `Last seen: ${formatLastSeen(lastSeen)}`}
                         ${workingTasks.length > 0 ? ` · Working on ${workingTasks.length} task${workingTasks.length > 1 ? "s" : ""}` : ""}
                       </div>
                     </div>
@@ -3682,7 +3754,7 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
             })()}
           </div>
           
-          <button class="secondary" style="font-size:11px; padding:6px 12px; margin-top:12px; width:100%; text-align:center;" data-nav="chat">💬 Open Chat with Engineer</button>
+          <button class="secondary" style="font-size:11px; padding:6px 12px; margin-top:12px; width:100%; text-align:center; display:inline-flex; align-items:center; justify-content:center; gap:5px;" data-nav="chat"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>Open Chat with Engineer</button>
         </div>
       </div>
 
@@ -3716,13 +3788,13 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
           </div>
 
           <div class="mgr-panel team-health">
-            <h3>📊 Team Workload Distribution</h3>
+            <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>Team Workload Distribution</h3>
             ${renderWorkloadChart(insights.ownerLoad)}
           </div>
 
           <!-- Dependency Graph Panel -->
           <div class="mgr-panel" style="border-left:4px solid #6554c0;">
-            <h3>🔗 Dependency Graph · Blocking Relationships</h3>
+            <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/></svg>Dependency Graph · Blocking Relationships</h3>
             ${renderDependencyGraph()}
           </div>
         </div>
@@ -3731,7 +3803,7 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
         <div style="display:grid;gap:14px;align-content:start;">
           <!-- Assign task form -->
           <div class="mgr-panel assign-panel">
-            <h3>⚡ Post Job Update · Assign via TaskPilot AI</h3>
+            <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>Post Job Update · Assign via TaskPilot AI</h3>
             <div class="mgr-assign-form">
               <div class="mgr-form-row">
                 <label>Task title *</label>
@@ -3757,8 +3829,11 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
                 <label>Team / Squad</label>
                 <input type="text" id="mgrAssignTeam" placeholder="Platform Apps" value="${escapeHtml(assignForm.team)}">
               </div>
-              <button class="mgr-assign-btn" id="mgrPostAssignBtn" ${assignmentLoading?"disabled":""}>
-                ${assignmentLoading ? "⏳ TaskPilot AI analyzing..." : "🤖 Analyze &amp; Assign with TaskPilot AI"}
+              <button class="mgr-assign-btn" id="mgrPostAssignBtn" ${assignmentLoading?"disabled":""} style="display:inline-flex;align-items:center;justify-content:center;gap:7px;">
+                ${assignmentLoading
+                  ? `<span style="display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.7s linear infinite;"></span>Analyzing…`
+                  : `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>Analyze &amp; Assign with TaskPilot AI`
+                }
               </button>
             </div>
 
@@ -3776,7 +3851,7 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
             <!-- Live activity feed -->
             ${managerActivityFeed.length > 0 ? `
               <div style="margin-bottom:12px; border-bottom:1px solid #f1f2f4; padding-bottom:12px;">
-                <p class="eyebrow" style="margin-bottom:6px; font-size:10px; color:#22a06b;">🟢 LIVE UPDATES</p>
+                <p class="eyebrow" style="margin-bottom:6px; font-size:10px; color:#22a06b; display:flex; align-items:center; gap:4px;"><span style="width:6px;height:6px;border-radius:50%;background:#22a06b;display:inline-block;"></span>LIVE UPDATES</p>
                 <div style="display:grid; gap:5px; max-height:120px; overflow-y:auto;">
                   ${managerActivityFeed.slice(0, 5).map(e => `
                     <div style="display:flex; align-items:flex-start; gap:7px; padding:6px 8px; background:#f4fff9; border:1px solid #b7e4ce; border-radius:6px;">
@@ -4126,9 +4201,9 @@ function renderTodayPriority(dynamicPlan) {
           <div class="tp-task-info">
             <div class="tp-task-title ${isDone ? "tp-strike" : ""}">
               ${escapeHtml(t.canonicalTitle)}
-              ${isWorking ? `<span class="tp-status-chip working">● Working</span>` : ""}
-              ${isDone    ? `<span class="tp-status-chip done">✓ Done</span>` : ""}
-              ${t.isBlocking ? `<span style="font-size:10px;background:#fff0b3;color:#974f0c;padding:1px 5px;border-radius:3px;font-weight:700;margin-left:4px;">⚠ Blocking</span>` : ""}
+              ${isWorking ? `<span class="tp-status-chip working" style="display:inline-flex;align-items:center;gap:3px;"><span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#0971b3;box-shadow:0 0 0 3px rgba(9,113,179,0.2);"></span> Working</span>` : ""}
+              ${isDone    ? `<span class="tp-status-chip done" style="display:inline-flex;align-items:center;gap:3px;"><svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg> Done</span>` : ""}
+              ${t.isBlocking ? `<span style="font-size:10px;background:#fff0b3;color:#974f0c;padding:1px 5px;border-radius:3px;font-weight:700;margin-left:4px;display:inline-flex;align-items:center;gap:3px;"><svg width="9" height="9" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg> Blocking</span>` : ""}
             </div>
             <div class="tp-task-meta">
               <span class="tp-src-badge" style="background:${srcColor}22;color:${srcColor};">${srcName}</span>
@@ -4144,14 +4219,14 @@ function renderTodayPriority(dynamicPlan) {
         </div>
         <div class="tp-task-actions">
           ${!isDone && !isWorking ? `
-            <button class="tp-btn-start" data-task-start="${t.id}" title="Mark as working">▶ Start</button>
+            <button class="tp-btn-start" data-task-start="${t.id}" title="Mark as working" style="display:inline-flex;align-items:center;gap:3px;"><svg width="10" height="10" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Start</button>
           ` : ""}
           ${isWorking ? `
-            <button class="tp-btn-done" data-task-complete="${t.id}" title="Mark as done">✓ Done</button>
-            <button class="tp-btn-cancel" data-task-cancel="${t.id}" title="Cancel">✕</button>
+            <button class="tp-btn-done" data-task-complete="${t.id}" title="Mark as done" style="display:inline-flex;align-items:center;gap:3px;"><svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg> Done</button>
+            <button class="tp-btn-cancel" data-task-cancel="${t.id}" title="Cancel" style="display:inline-flex;align-items:center;"><svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
           ` : ""}
           ${isDone ? `
-            <button class="tp-btn-reopen" data-task-reopen="${t.id}" title="Reopen">↩ Reopen</button>
+            <button class="tp-btn-reopen" data-task-reopen="${t.id}" title="Reopen" style="display:inline-flex;align-items:center;gap:3px;"><svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18"/></svg> Reopen</button>
           ` : ""}
         </div>
       </div>`;
@@ -4182,19 +4257,19 @@ function renderTodayPriority(dynamicPlan) {
             <span class="tp-summary-pill">
               ${completedTaskIds.length} done · ${workingTaskIds.length} working · ${queue.length - completedTaskIds.length - workingTaskIds.length} todo
             </span>
-            <button class="primary" id="regeneratePlanBtn" style="font-size:12px;padding:7px 12px;" ${dailyPlanLoading ? "disabled" : ""}>
-              ${dailyPlanLoading ? "⚙ Analyzing…" : "Brief it"}
+            <button class="primary" id="regeneratePlanBtn" style="font-size:12px;padding:7px 12px;display:inline-flex;align-items:center;gap:4px;" ${dailyPlanLoading ? "disabled" : ""}>
+              ${dailyPlanLoading ? `<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="spin"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Analyzing…` : "Brief it"}
             </button>
-            <button class="secondary" id="generateDailyReportBtn" style="font-size:12px;padding:7px 12px;">
-              📄 Daily Report
+            <button class="secondary" id="generateDailyReportBtn" style="font-size:12px;padding:7px 12px;display:inline-flex;align-items:center;gap:4px;">
+              <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg> Daily Report
             </button>
           </div>
         </div>
 
-        ${overdue.length || today.length || upcoming.length ? "" : `<div style="padding:32px;text-align:center;color:#626f86;">All caught up 🎉</div>`}
-        ${renderSection("⚠ Overdue", overdue, "#de350b")}
-        ${renderSection("📅 Due Today", today, "#0c66e4")}
-        ${renderSection("🗓 Upcoming", upcoming, "#22a06b")}
+        ${overdue.length || today.length || upcoming.length ? "" : `<div style="padding:32px;text-align:center;color:#626f86;display:flex;flex-direction:column;align-items:center;gap:8px;"><svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color:#22a06b;"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> All caught up</div>`}
+        ${renderSection("Overdue", overdue, "#de350b")}
+        ${renderSection("Due Today", today, "#0c66e4")}
+        ${renderSection("Upcoming", upcoming, "#22a06b")}
       </div>
 
       <!-- Right: Agent + Schedule -->
@@ -4310,9 +4385,9 @@ function renderAgentScanConsole() {
   const totalCount = state.prioritized.length;
 
   return `
-    <div class="agent-page-shell">
-      <!-- Left: terminal + task selection -->
-      <div class="agent-main-col">
+    <div class="agent-page-shell" style="display:grid;grid-template-columns:1fr 300px 360px;gap:16px;height:calc(100vh - 120px);min-height:0;">
+      <!-- Col 1: terminal + task selection -->
+      <div class="agent-main-col" style="display:flex;flex-direction:column;gap:12px;min-height:0;overflow:hidden;">
         <!-- Header -->
         <div class="agent-page-header">
           <div>
@@ -4344,7 +4419,7 @@ function renderAgentScanConsole() {
         </div>
 
         <!-- Terminal -->
-        <div class="agent-terminal" id="agentTerminal">
+        <div class="agent-terminal" id="agentTerminal" style="flex:1;min-height:0;overflow-y:auto;">
           ${agentLogLines.length === 0
             ? `<div class="agent-terminal-idle">[TASKPILOT AGENT] Idle — select a task above and click ▶ Start Agent to begin autonomous execution.</div>`
             : agentLogLines.map(line => `<div>${escapeHtml(line)}</div>`).join("")
@@ -4352,7 +4427,7 @@ function renderAgentScanConsole() {
         </div>
 
         <!-- Real-time completion bar -->
-        <div class="agent-progress-bar-wrap">
+        <div class="agent-progress-bar-wrap" style="flex-shrink:0;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <span style="font-size:12px;font-weight:700;color:#172b4d;">Overall progress</span>
             <span style="font-size:12px;color:#626f86;">${completedCount} of ${totalCount} tasks done</span>
@@ -4364,7 +4439,7 @@ function renderAgentScanConsole() {
 
         <!-- Action buttons for selected task -->
         ${agentTask ? `
-          <div class="agent-task-actions-row">
+          <div class="agent-task-actions-row" style="flex-shrink:0;">
             ${!completedTaskIds.includes(agentTask.id) && !workingTaskIds.includes(agentTask.id) ? `
               <button class="tp-btn-start" data-task-start="${agentTask.id}">▶ Start "${agentTask.canonicalTitle.slice(0,30)}…"</button>
             ` : ""}
@@ -4380,8 +4455,8 @@ function renderAgentScanConsole() {
         ` : ""}
       </div>
 
-      <!-- Right: task brief + Google resources -->
-      <aside class="agent-aside-col">
+      <!-- Col 2: task brief + resources + status -->
+      <aside class="agent-aside-col" style="display:flex;flex-direction:column;gap:12px;overflow-y:auto;min-height:0;">
         <!-- Execution brief -->
         ${agentTask ? `
           <div class="agent-brief-card">
@@ -4422,7 +4497,7 @@ function renderAgentScanConsole() {
           </div>
         </div>
 
-        <!-- Agent confidence -->
+        <!-- Agent status -->
         <div class="agent-confidence-card">
           <p class="eyebrow" style="margin-bottom:6px;">Agent Status</p>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -4437,6 +4512,11 @@ function renderAgentScanConsole() {
           </div>
         </div>
       </aside>
+
+      <!-- Col 3: inline AI chat -->
+      <div style="min-height:0;display:flex;flex-direction:column;">
+        ${renderInlineAgentChat()}
+      </div>
     </div>
   `;
 }
@@ -4988,10 +5068,10 @@ function renderMeetingMemory() {
   };
 
   const typeIcon = (t) => {
-    if (t === "zoom") return "📹";
-    if (t === "slack") return "💬";
-    if (t === "recurring") return "🔁";
-    return "📅";
+    if (t === "zoom") return `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>`;
+    if (t === "slack") return `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>`;
+    if (t === "recurring") return `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18"/></svg>`;
+    return `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`;
   };
 
   return `
@@ -5004,10 +5084,13 @@ function renderMeetingMemory() {
         </div>
         <div style="display:flex; gap:8px;">
           <button class="secondary" id="addMeetingNoteBtn" style="display:flex; align-items:center; gap:6px;">
-            <span>➕</span> Add Note
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg> Add Note
           </button>
           <button class="primary" id="startMeetingAgentBtn" ${meetingAgentRunning ? "disabled" : ""} style="display:flex; align-items:center; gap:6px; background: linear-gradient(135deg, #0ea5e9, #0284c7); border: none;">
-            <span>${meetingAgentRunning ? "⏳" : "⚡"}</span> ${meetingAgentRunning ? "Scanning..." : "Run Meeting Agent"}
+            ${meetingAgentRunning
+              ? `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="spin" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Scanning...`
+              : `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> Run Meeting Agent`
+            }
           </button>
         </div>
       </div>
@@ -5015,8 +5098,8 @@ function renderMeetingMemory() {
       <!-- Agent Terminal -->
       <div class="meeting-terminal" id="meetingAgentTerminal">
         ${meetingAgentLog.length === 0
-          ? `<div class="meeting-terminal-idle">
-               <span style="font-size:14px;">🤖</span> [MEETING AGENT] Idle. Click "Run Meeting Agent" to scan emails, Slack, and calendar for meetings autonomously.
+          ? `<div class="meeting-terminal-idle" style="display:flex; align-items:center; gap:8px;">
+               <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:block;"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg> [MEETING AGENT] Idle. Click "Run Meeting Agent" to scan emails, Slack, and calendar for meetings autonomously.
              </div>`
           : meetingAgentLog.map(l => `
               <div class="meeting-terminal-line">
@@ -5089,7 +5172,7 @@ function renderMeetingMemory() {
 
               ${activeMeeting.aiReasoning ? `
                 <div class="meeting-detail-section ai-reasoning">
-                  <strong>🤖 AI Reasoning:</strong> ${escapeHtml(activeMeeting.aiReasoning)}
+                  <strong>AI Reasoning:</strong> ${escapeHtml(activeMeeting.aiReasoning)}
                 </div>
               ` : ""}
 
@@ -5183,19 +5266,19 @@ function renderMeetingCard(m, priorityColor, typeIcon) {
         </div>
       </div>
       
-      <div class="meeting-card-meta">
-        <span>📅 ${m.suggestedDate} at ${m.suggestedTime}</span>
+      <div class="meeting-card-meta" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+        <span style="display:inline-flex; align-items:center; gap:3px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg> ${m.suggestedDate} at ${m.suggestedTime}</span>
         <span>•</span>
-        <span>⏱ ${m.duration} min</span>
+        <span style="display:inline-flex; align-items:center; gap:3px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> ${m.duration} min</span>
         <span>•</span>
-        <span>👥 ${(m.attendees||[]).length} attendees</span>
+        <span style="display:inline-flex; align-items:center; gap:3px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg> ${(m.attendees||[]).length} attendees</span>
       </div>
       
       <div class="meeting-card-footer">
         <span class="meeting-card-urgency">${m.urgencyLabel || m.priority}</span>
         ${m.savedToCalendar || m.status === "Scheduled"
-          ? `<span class="meeting-card-status saved">✓ Saved to Calendar</span>`
-          : `<span class="meeting-card-status pending">⏳ Pending Save</span>`
+          ? `<span class="meeting-card-status saved" style="display:inline-flex; align-items:center; gap:3px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg> Saved to Calendar</span>`
+          : `<span class="meeting-card-status pending" style="display:inline-flex; align-items:center; gap:3px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Pending Save</span>`
         }
       </div>
     </button>
@@ -5363,7 +5446,7 @@ function renderJiraBoard() {
       <!-- Filters bar -->
       <div class="scrum-filters" id="scrumFilters">
         <div class="scrum-search-wrap">
-          <span class="scrum-search-icon">🔍</span>
+          <span class="scrum-search-icon"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg></span>
           <input type="text" class="scrum-search" id="scrumSearch" placeholder="Search tasks…" value="${escapeHtml(scrumSearch)}">
         </div>
         <div class="scrum-filter-group">
@@ -5450,7 +5533,7 @@ function renderWorkspaceHub() {
         <div class="ws-task-list">
           ${!activeSource?.tasks.length
             ? `<div style="padding:48px;text-align:center;color:#626f86;">
-                <p style="font-size:24px;margin:0 0 10px;">🎉</p>
+                <p style="margin:0 0 10px;display:flex;justify-content:center;color:#22a06b;"><svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></p>
                 <h3 style="margin:0 0 6px;color:#172b4d;">All clear in ${activeSource?.name}!</h3>
                 <p style="margin:0;font-size:13px;">No open tasks from this source.</p>
                </div>`
@@ -5597,9 +5680,9 @@ function renderScrumCard(task, status) {
         <span class="scrum-owner">${task.owner||"—"}</span>
       </div>
       <div class="scrum-card-actions">
-        ${status === "Todo" || status === "Open" || status === "New" ? `<button class="scrum-btn" data-transition-task="${task.id}" data-to-status="In progress">▶ Start</button>` : ""}
-        ${status === "In progress" || status === "Review requested" ? `<button class="scrum-btn success" data-transition-task="${task.id}" data-to-status="Done">✔ Done</button>` : ""}
-        ${isDone ? `<button class="scrum-btn" data-transition-task="${task.id}" data-to-status="Todo">↺</button>` : ""}
+        ${status === "Todo" || status === "Open" || status === "New" ? `<button class="scrum-btn" data-transition-task="${task.id}" data-to-status="In progress" style="display:inline-flex;align-items:center;gap:3px;"><svg width="11" height="11" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg> Start</button>` : ""}
+        ${status === "In progress" || status === "Review requested" ? `<button class="scrum-btn success" data-transition-task="${task.id}" data-to-status="Done" style="display:inline-flex;align-items:center;gap:3px;"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg> Done</button>` : ""}
+        ${isDone ? `<button class="scrum-btn" data-transition-task="${task.id}" data-to-status="Todo" style="display:inline-flex;align-items:center;"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18"/></svg></button>` : ""}
       </div>
     </div>
   `;
@@ -5631,10 +5714,10 @@ function renderScrumStream(tasks) {
       const isOverdue = date !== "No date" && date < "2026-06-19";
       return `
         <div class="scrum-date-group">
-          <div class="scrum-date-label ${isToday?"today":""} ${isOverdue?"overdue":""}">
-            ${isOverdue ? "⚠ " : isToday ? "● " : ""}
+          <div class="scrum-date-label ${isToday?"today":""} ${isOverdue?"overdue":""}" style="display:flex;align-items:center;gap:4px;">
+            ${isOverdue ? `<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" style="color:#de350b;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>` : isToday ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#0c66e4;box-shadow: 0 0 0 4px rgba(12, 102, 228, 0.2);"></span>` : ""}
             ${date === "No date" ? "No deadline" : new Intl.DateTimeFormat("en",{weekday:"short",month:"short",day:"numeric"}).format(new Date(date+"T12:00:00"))}
-            <span class="scrum-date-count">${byDate[date].length}</span>
+            <span class="scrum-date-count" style="margin-left:auto;">${byDate[date].length}</span>
           </div>
           <div class="scrum-stream-row">
             ${byDate[date].map(t => renderScrumStreamCard(t)).join("")}
@@ -6301,7 +6384,7 @@ function renderEngineerAnalyticsManager() {
 
         <!-- Source bars -->
         <div>
-          <h4 style="margin:0 0 8px;font-size:13px;">🔌 Source Breakdown</h4>
+          <h4 style="margin:0 0 8px;font-size:13px;display:flex;align-items:center;gap:6px;"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg> Source Breakdown</h4>
           ${renderSourceBars(a.sourceMap)}
         </div>
       </div>`;
@@ -6355,7 +6438,7 @@ function renderEngineerAnalyticsManager() {
         <div>
           ${detailPanel || `
             <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:40px;text-align:center;color:#94a3b8;">
-              <div style="font-size:40px;margin-bottom:10px;">📊</div>
+              <div style="display:flex;justify-content:center;margin-bottom:10px;color:#94a3b8;"><svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg></div>
               <p style="font-size:14px;font-weight:600;color:#64748b;margin:0;">Select an engineer to see their performance chart</p>
             </div>`}
         </div>
@@ -6402,7 +6485,7 @@ function renderExecutionPlan(selected, executionBrief) {
         </div>
 
         <div class="panel" style="background:#fff; margin-bottom:15px;">
-          <h3>📋 Definition of Done</h3>
+          <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>Definition of Done</h3>
           <p style="font-size:14px; line-height:1.5; color:#34414f;">
             "${executionBrief.definitionOfDone}"
           </p>
@@ -6412,7 +6495,7 @@ function renderExecutionPlan(selected, executionBrief) {
         </div>
 
         <div class="panel" style="background:#fff;">
-          <h3>✅ Implementation Process Checklist</h3>
+          <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="#22a06b" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Implementation Process Checklist</h3>
           <div style="display:grid; gap:12px; margin-top:12px;" id="executionChecklistContainer">
             ${executionBrief.process.map((step, idx) => `
               <label style="display:flex; align-items:center; gap:10px; font-size:14px; cursor:pointer;">
@@ -6463,7 +6546,7 @@ function renderEngineerSettings() {
 
       <div style="display:grid; grid-template-columns: 1.2fr 1fr; gap:20px; margin-top:15px;">
         <div class="panel" style="background:#fff; display:grid; gap:16px;">
-          <h3>👤 Personal Profile</h3>
+          <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>Personal Profile</h3>
           <div>
             <label class="api-label">
               <span>Full Name</span>
@@ -6494,7 +6577,7 @@ function renderEngineerSettings() {
 
         <div style="display:grid; gap:16px;">
           <div class="panel" style="background:#fff;">
-            <h3>📊 My Work Stats</h3>
+            <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>My Work Stats</h3>
             <div style="display:grid; gap:8px; margin-top:10px;">
               <div style="display:flex; justify-content:space-between; font-size:13px; border-bottom:1px solid #eadfce; padding-bottom:4px;">
                 <span>Completed Today</span>
@@ -6512,7 +6595,7 @@ function renderEngineerSettings() {
           </div>
 
           <div class="panel" style="background:#fff;">
-            <h3>⚙️ Preferences</h3>
+            <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>Preferences</h3>
             <div style="display:grid; gap:12px; margin-top:10px;">
               <label style="display:flex; align-items:center; gap:8px; font-size:13px;">
                 <input type="checkbox" ${userPreferences.prefersDense ? "checked" : ""} style="width:16px; height:16px;">
@@ -6543,7 +6626,7 @@ function renderManagerSettings() {
 
       <div style="display:grid; grid-template-columns: 1.2fr 1fr; gap:20px; margin-top:15px;">
         <div class="panel" style="background:#fff; display:grid; gap:16px;">
-          <h3>👤 Manager Profile</h3>
+          <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>Manager Profile</h3>
           <div>
             <label class="api-label">
               <span>Full Name</span>
@@ -6576,7 +6659,7 @@ function renderManagerSettings() {
 
         <div style="display:grid; gap:16px;">
           <div class="panel" style="background:#fff;">
-            <h3>📊 Team Overview</h3>
+            <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>Team Overview</h3>
             <div style="display:grid; gap:8px; margin-top:10px;">
               <div style="display:flex; justify-content:space-between; font-size:13px; border-bottom:1px solid #eadfce; padding-bottom:4px;">
                 <span>Total Engineers</span>
@@ -6594,7 +6677,7 @@ function renderManagerSettings() {
           </div>
 
           <div class="panel" style="background:#fff;">
-            <h3>🛡 System Status</h3>
+            <h3 style="display:flex;align-items:center;gap:7px;"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>System Status</h3>
             <div style="display:grid; gap:8px; margin-top:10px;">
               <div style="display:flex; justify-content:space-between; font-size:13px; border-bottom:1px solid #eadfce; padding-bottom:4px;">
                 <span>Backend Connection</span>
@@ -6616,85 +6699,92 @@ function renderManagerSettings() {
   `;
 }
 
-// ─── Floating Companion Dock & Log ────────────────────────────────────────────
+// ─── Floating Companion Dock — REMOVED ───────────────────────────────────────
+// The AI chat is now embedded inline on the agent-scan page only.
 function renderCompanionDock() {
-  if (isDesktopShell) return "";
+  return ""; // floating widget disabled — chat lives inside renderAgentScanConsole
+}
+
+// ─── Inline Agent Chat Panel (used inside renderAgentScanConsole) ─────────────
+function renderInlineAgentChat() {
+  const lastLog = companionLog[companionLog.length - 1];
+  const hasChips = lastLog && lastLog.role === "agent" && lastLog.chips && lastLog.chips.length > 0;
+
   return `
-    <div class="companion ${companionOpen ? "" : "closed"}">
-      <button class="dock-avatar" id="dockToggle">
-        <span class="dock-ear left"></span>
-        <span class="dock-ear right"></span>
-        <span class="dock-face"></span>
-        <span class="dock-eye left-eye"></span>
-        <span class="dock-eye right-eye"></span>
-        <span class="dock-nose"></span>
-      </button>
+    <div style="display:flex;flex-direction:column;height:100%;background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
+      <!-- Chat header -->
+      <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:10px;background:#f8fafc;flex-shrink:0;">
+        <img src="${logoDataUrl}" alt="TaskPilot" style="width:26px;height:26px;object-fit:cover;border-radius:6px;flex-shrink:0;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#172b4d;">TaskPilot AI</div>
+          <div style="font-size:10px;color:#22a06b;display:flex;align-items:center;gap:4px;">
+            <span style="width:6px;height:6px;border-radius:50%;background:#22a06b;display:inline-block;"></span>
+            Attested · ${teeSession.attestationHash}
+          </div>
+        </div>
+        <button id="captureScreen" style="font-size:10px;padding:3px 8px;background:#18745f;border-radius:4px;color:#fff;border:none;cursor:pointer;flex-shrink:0;">TEE OCR</button>
+      </div>
 
-      ${companionOpen ? `
-        <div class="companion-panel">
-          <header class="companion-head">
-            <div style="display:flex;align-items:center;gap:8px;">
-              <img src="${logoDataUrl}" alt="TaskPilot" style="width:28px;height:28px;object-fit:cover;border-radius:7px;flex-shrink:0;">
-              <div>
-                <strong>TaskPilot Attestation</strong>
-                <span>${currentContext ? contextLabel(currentContext) : "Ready"}</span>
-              </div>
+      <!-- Plan steps -->
+      ${currentPlanSteps.length > 0 ? `
+        <div style="padding:8px 12px;border-bottom:1px solid #f1f2f4;background:#fffdf7;flex-shrink:0;">
+          ${currentPlanSteps.map(step => `
+            <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#44546f;padding:2px 0;">
+              <span>${stepIcon(step.status)}</span>
+              <span>${escapeHtml(step.label || step.description)}</span>
             </div>
-            <div class="dock-actions">
-              <button id="captureScreen" style="font-size:10px; padding:4px 8px; background:#18745f; border-radius:4px; color:#fff; border:none; cursor:pointer;">
-                TEE OCR
-              </button>
-              <button id="minimizeCompanion" style="background:none; border:none; font-size:14px; font-weight:bold; cursor:pointer; color:#65717d;">–</button>
-              <button id="closeCompanion" style="background:none; border:none; font-size:14px; font-weight:bold; cursor:pointer; color:#65717d;">×</button>
-            </div>
-          </header>
-
-          <div class="tee-strip">
-            <span class="secure-dot"></span>
-            <strong>Attested</strong>
-            <span>${teeSession.attestationHash}</span>
-          </div>
-
-          <div class="plan-steps">
-            ${currentPlanSteps.length === 0 
-              ? `<div class="plan-step"><span class="step-icon">o</span><span>Ready to guide action plans.</span></div>`
-              : currentPlanSteps.map(step => `
-                  <div class="plan-step ${step.status}">
-                    <span class="step-icon">${stepIcon(step.status)}</span>
-                    <span>${escapeHtml(step.label || step.description)}</span>
-                  </div>
-                `).join("")
-            }
-          </div>
-
-          <div class="companion-log" id="companionLogBox">
-            ${companionLog.map(log => `
-              <p class="${log.role}">${renderLogText(log.html || log.text)}</p>
-            `).join("")}
-          </div>
-
-          ${(() => {
-            const lastLog = companionLog[companionLog.length - 1];
-            if (lastLog && lastLog.role === "agent" && lastLog.chips && lastLog.chips.length > 0) {
-              return `
-                <div class="quick-chips">
-                  ${lastLog.chips.map(chip => `
-                    <button class="quick-chip" data-chip="${escapeHtml(chip)}" style="cursor:pointer;">${escapeHtml(chip)}</button>
-                  `).join("")}
-                </div>
-              `;
-            }
-            return "";
-          })()}
-
-          <form id="companionForm" class="companion-form">
-            <textarea id="taskInput" name="message" rows="1" placeholder="Ask, plan, or execute..."></textarea>
-            <button id="sendCompanionBtn" ${isProcessing ? "class='stop'" : ""}>
-              ${isProcessing ? "Stop" : "Send"}
-            </button>
-          </form>
+          `).join("")}
         </div>
       ` : ""}
+
+      <!-- Message log -->
+      <div class="companion-log" id="companionLogBox" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:0;">
+        ${companionLog.map(log => `
+          <div style="display:flex;flex-direction:${log.role === "user" ? "row-reverse" : "row"};gap:8px;align-items:flex-end;">
+            ${log.role === "agent" ? `<div style="width:24px;height:24px;border-radius:50%;background:#152238;color:#fff;display:grid;place-items:center;font-size:10px;font-weight:800;flex-shrink:0;">A</div>` : ""}
+            <div style="max-width:85%;padding:10px 13px;border-radius:${log.role === "user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px"};background:${log.role === "user" ? "#152238" : "#f1f5f9"};color:${log.role === "user" ? "#fff" : "#172b4d"};font-size:13px;line-height:1.5;">
+              ${renderLogText(log.html || log.text)}
+            </div>
+          </div>
+        `).join("")}
+        ${isProcessing ? `
+          <div style="display:flex;gap:8px;align-items:flex-end;">
+            <div style="width:24px;height:24px;border-radius:50%;background:#152238;color:#fff;display:grid;place-items:center;font-size:10px;font-weight:800;flex-shrink:0;">A</div>
+            <div style="padding:10px 13px;border-radius:14px 14px 14px 4px;background:#f1f5f9;color:#44546f;font-size:13px;">
+              <span style="display:inline-flex;gap:3px;align-items:center;">
+                <span style="animation:blink 1s infinite 0s;opacity:0.4;">●</span>
+                <span style="animation:blink 1s infinite 0.2s;opacity:0.4;">●</span>
+                <span style="animation:blink 1s infinite 0.4s;opacity:0.4;">●</span>
+              </span>
+            </div>
+          </div>
+        ` : ""}
+      </div>
+
+      <!-- Quick chips -->
+      ${hasChips ? `
+        <div style="padding:8px 12px;display:flex;flex-wrap:wrap;gap:6px;border-top:1px solid #f1f2f4;flex-shrink:0;background:#fafbfc;">
+          ${lastLog.chips.map(chip => `
+            <button class="quick-chip" data-chip="${escapeHtml(chip)}"
+              style="font-size:11px;padding:4px 10px;border-radius:999px;border:1px solid #d0d7de;background:#fff;color:#172b4d;cursor:pointer;font-weight:600;">
+              ${escapeHtml(chip)}
+            </button>
+          `).join("")}
+        </div>
+      ` : ""}
+
+      <!-- Input form -->
+      <div style="padding:10px 12px;border-top:1px solid #e2e8f0;background:#f8fafc;flex-shrink:0;">
+        <form id="companionForm" style="display:flex;gap:8px;align-items:flex-end;">
+          <textarea id="taskInput" name="message" rows="1"
+            placeholder="Ask the agent anything…"
+            style="flex:1;resize:none;border:1px solid #d0d7de;border-radius:8px;padding:9px 12px;font-size:13px;font-family:inherit;outline:none;min-height:38px;max-height:120px;overflow-y:auto;background:#fff;color:#172b4d;"></textarea>
+          <button id="sendCompanionBtn" ${isProcessing ? "class='stop'" : ""}
+            style="padding:9px 16px;border-radius:8px;border:none;background:${isProcessing ? "#ad2f2f" : "#152238"};color:#fff;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0;min-width:60px;">
+            ${isProcessing ? "Stop" : "Send"}
+          </button>
+        </form>
+      </div>
     </div>
   `;
 }
@@ -6861,7 +6951,7 @@ function assignRandomTasks() {
   const activeTasks = state.prioritized.filter(t => !isTaskCompleted(t.id));
   
   if (activeTasks.length === 0) {
-    pushCompanion("agent", "🤖 No active tasks available to assign.", false);
+    pushCompanion("agent", "No active tasks available to assign.", false);
     return;
   }
   
@@ -6885,7 +6975,7 @@ function assignRandomTasks() {
   const unassignedTasks = activeTasks.filter(t => !t.owner || t.owner === "Unassigned" || t.owner.trim() === "");
   
   if (unassignedTasks.length === 0) {
-    pushCompanion("agent", "🤖 All tasks are already assigned to team members.", false);
+    pushCompanion("agent", "All tasks are already assigned to team members.", false);
     triggerLocalNotification("No Unassigned Tasks", "All tasks already have owners.");
     return;
   }
@@ -6947,11 +7037,11 @@ function assignRandomTasks() {
       color: "#22a06b"
     });
     
-    pushCompanion("agent", `🤖 Auto-assigned "${task.canonicalTitle}" to ${bestEngineer} (${task.severity})`, false);
+    pushCompanion("agent", `Auto-assigned "${task.canonicalTitle}" to ${bestEngineer} (${task.severity})`, false);
   });
   
   if (assignedCount === 0) {
-    pushCompanion("agent", "🤖 No changes made - all tasks are already assigned.", false);
+    pushCompanion("agent", "No changes made - all tasks are already assigned.", false);
     return;
   }
   
@@ -6969,6 +7059,17 @@ function assignRandomTasks() {
 
 // ─── Event Binding ────────────────────────────────────────────────────────────
 function bindEvents() {
+  // Theme Toggling
+  const themeToggleBtn = document.querySelector("#themeToggleBtn");
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener("click", () => {
+      activeTheme = activeTheme === "light" ? "dark" : "light";
+      localStorage.setItem("taskpilot:theme", activeTheme);
+      document.documentElement.setAttribute("data-theme", activeTheme);
+      render();
+    });
+  }
+
   // Navigation
   document.querySelectorAll("[data-nav]").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -6980,6 +7081,10 @@ function bindEvents() {
         activePage = targetPage;
         if (targetPage === "inbox" || targetPage === "source-tree") {
           scrumActiveSource = "all";
+        }
+        // Auto-open the AI companion chat when navigating to the AI Agent page
+        if (targetPage === "agent-scan") {
+          companionOpen = true;
         }
       }
       render();
@@ -7037,12 +7142,12 @@ function bindEvents() {
   const optimizeScheduleBtn = document.querySelector("#optimizeScheduleBtn");
   if (optimizeScheduleBtn) {
     optimizeScheduleBtn.addEventListener("click", () => {
-      optimizeScheduleBtn.innerHTML = '<span>⏳</span> Assigning...';
+      optimizeScheduleBtn.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.7s linear infinite;"></span> Assigning...';
       optimizeScheduleBtn.disabled = true;
       
       setTimeout(() => {
         assignRandomTasks();
-        optimizeScheduleBtn.innerHTML = '<span>🤖</span> Auto-Assign Tasks';
+        optimizeScheduleBtn.innerHTML = 'Auto-Assign Tasks';
         optimizeScheduleBtn.disabled = false;
       }, 100);
     });
@@ -8564,20 +8669,20 @@ function bindEvents() {
   document.querySelector("#engCalPdfBtn")?.addEventListener("click", async () => {
     const calendarPage = document.querySelector("#engCalendarPage");
     if (!calendarPage) {
-      alert("❌ Calendar page not found. Please try again.");
+      alert("❌ Calendar page not found.");
       return;
     }
 
     // Check if libraries are loaded
     if (typeof html2canvas === "undefined") {
-      alert("❌ PDF library not loaded. Please refresh the page.");
+      alert("❌ PDF library not loaded.");
       return;
     }
 
     const pdfBtn = document.querySelector("#engCalPdfBtn");
     if (pdfBtn) {
       pdfBtn.disabled = true;
-      pdfBtn.textContent = "⏳ Generating PDF...";
+      pdfBtn.innerHTML = 'Generating...';
     }
 
     try {
@@ -8604,7 +8709,7 @@ function bindEvents() {
       const today = new Date().toISOString().slice(0, 10);
       pdf.save(`TaskPilot_Calendar_${name.replace(/\s+/g, "_")}_${today}.pdf`);
 
-      alert("✅ Calendar PDF downloaded successfully!");
+      alert("✅ Calendar PDF downloaded!");
     } catch (err) {
       console.error("PDF generation failed:", err);
       alert(`❌ Failed to generate PDF: ${err.message}`);
@@ -8647,10 +8752,10 @@ function bindEvents() {
       const today = new Date().toISOString().slice(0, 10);
       pdf.save(`TaskPilot_Analytics_${name.replace(/\s+/g, "_")}_${today}.pdf`);
 
-      alert("✅ Analytics PDF downloaded successfully!");
+      alert("✅ Analytics PDF downloaded!");
     } catch (err) {
       console.error("PDF generation failed:", err);
-      alert("❌ Failed to generate PDF. Please try again.");
+      alert("❌ Failed to generate PDF.");
     } finally {
       if (pdfBtn) {
         pdfBtn.style.display = "flex";
@@ -9175,7 +9280,7 @@ function buildAgentResponse(intent) {
       // Show ALL emails from the database with full body shown
       const allEmails = sources.find(s => s.id === "email")?.items || [];
       if (allEmails.length === 0) {
-        return { html: `<span>📭 No emails found in your connected inbox. Check that Outlook is synced.</span>`, chips: ["Show my tasks", "Top 5 tasks", "Anything else?"] };
+        return { html: `<span>📭 No emails found in your connected inbox.</span>`, chips: ["Show my tasks", "Top 5 tasks", "Anything else?"] };
       }
       const sevColor2 = { P1: "#de350b", P2: "#974f0c", P3: "#216e4e", P4: "#626f86" };
       // Filter by topic if provided
@@ -9503,7 +9608,7 @@ function startTask(id) {
   }
   
   saveWorkingTask(getUserEmail(), getUserName(), id, task.canonicalTitle);
-  pushCompanion("agent", `Woof! 🐾 Started working on "${task.canonicalTitle}". I'll keep my eyes on your progress and help you fetch results! Ruff!`, false);
+  pushCompanion("agent", `Started working on "${task.canonicalTitle}". I'll keep my eyes on your progress and help you fetch results!`, false);
   render();
   syncStateWithBackend();
 }
@@ -9536,7 +9641,7 @@ function reassignTask(id, newOwner) {
     color: "#0c66e4"
   });
 
-  pushCompanion("agent", `🐾 Reassigned "${task.canonicalTitle}" to ${newOwner}.`, false);
+  pushCompanion("agent", `Reassigned "${task.canonicalTitle}" to ${newOwner}.`, false);
   triggerLocalNotification("Task Reassigned", `Task "${task.canonicalTitle}" assigned to ${newOwner}.`);
 
   state = buildState(sources, calendarBlocks);
@@ -9570,7 +9675,7 @@ function adjustSeverity(id, newSeverity) {
     color: "#e67e22"
   });
 
-  pushCompanion("agent", `🐾 Adjusted severity of "${task.canonicalTitle}" from ${oldSeverity} to ${newSeverity}.`, false);
+  pushCompanion("agent", `Adjusted severity of "${task.canonicalTitle}" from ${oldSeverity} to ${newSeverity}.`, false);
   triggerLocalNotification("Severity Updated", `Task "${task.canonicalTitle}" updated to ${newSeverity}.`);
 
   state = buildState(sources, calendarBlocks);
@@ -9603,7 +9708,7 @@ function addNewTaskLocal(title, severity, due, owner) {
   }
   addedTasks.push(newTask);
   
-  pushCompanion("agent", `🐾 Added new task: "${title}" assigned to ${owner || "Unassigned"}.`, false);
+  pushCompanion("agent", `Added new task: "${title}" assigned to ${owner || "Unassigned"}.`, false);
   
   state = buildState(sources, calendarBlocks);
   render();
@@ -9714,7 +9819,7 @@ async function runCompanionWorkflow(intent, options = {}) {
   const intentLower = intent.toLowerCase();
   if (/\b(summary|report|daily report|end.?of.?day|eod|what did i do|what have i done|show report|generate report|pdf)\b/.test(intentLower)) {
     pushCompanion("user", intent, false);
-    pushCompanion("agent", "Generating your end-of-day summary report as a PDF… Opening now.", false);
+    pushCompanion("agent", "Generating your daily report as a PDF...", false);
     render();
     await generateDailyReportPDF();
     return;
@@ -9759,11 +9864,11 @@ async function runCompanionWorkflow(intent, options = {}) {
     await sleep(220);
     await runStep(runId, "context", "done", `${contextLabel(currentContext)} detected`);
 
-    await runStep(runId, "tee", "running", "Sealing minimized payload inside TEE envelope");
+    await runStep(runId, "tee", "running", "Sealing payload inside TEE envelope");
     await sleep(260);
     await runStep(runId, "tee", "done", `Sealed payload ${sealed.payloadDigest}`);
 
-    await runStep(runId, "reason", "running", "Ranking urgency, deadline, blockers, and duplicate signals");
+    await runStep(runId, "reason", "running", "Ranking tasks and blocker signals");
     
     let result;
     const parsedIntent = parseAgentIntent(intent);
@@ -9795,11 +9900,11 @@ async function runCompanionWorkflow(intent, options = {}) {
             <strong style="font-size:13px;color:#172b4d;display:block;">${escapeHtml(topEmail.title)}</strong>
           </div>
           <div style="font-size:13px;color:#172b4d;line-height:1.7;white-space:pre-wrap;padding:0 2px;">${escapeHtml(aiSummary)}</div>
-          ${vpEmails.length > 1 ? `<div style="margin-top:10px;font-size:11px;color:#0c66e4;">+${vpEmails.length - 1} more VP email${vpEmails.length > 2 ? 's' : ''} — say "show VP emails" to see all.</div>` : ""}`,
-          chips: ["Show VP emails", "Make MAIL-920 priority", "Show blockers", "▶ Start top P1"]
+          ${vpEmails.length > 1 ? `<div style="margin-top:10px;font-size:11px;color:#0c66e4;">+${vpEmails.length - 1} more VP email${vpEmails.length > 2 ? 's' : ''}.</div>` : ""}`,
+          chips: ["Show VP emails", "Show blockers", "▶ Start top P1", "Anything else?"]
         };
       } else {
-        result = { html: `<span>📭 No VP or executive emails found in your inbox right now.</span>`, chips: ["Show all emails", "Show my tasks"] };
+        result = { html: `<span>📭 No VP or executive emails found.</span>`, chips: ["Show all emails", "Show my tasks"] };
       }
     } else {
       const structuredResponse = buildAgentResponse(intent);
@@ -9830,18 +9935,18 @@ async function runCompanionWorkflow(intent, options = {}) {
         }
       }
     }
-    await runStep(runId, "reason", "done", "Reasoning complete with auditable rationale");
+    await runStep(runId, "reason", "done", "Reasoning complete");
 
-    await runStep(runId, "consent", "running", "Preparing user-approved recommendation");
+    await runStep(runId, "consent", "running", "Preparing recommendation");
     await sleep(180);
-    await runStep(runId, "consent", "done", "No execution performed without approval");
+    await runStep(runId, "consent", "done", "Recommendation ready");
 
     if (runId !== activeRunId) return;
     lastAnswer = (typeof result === "object" && result !== null) ? (result.html || result.text) : result;
     pushCompanion("agent", result, false);
   } catch (error) {
     if (runId === activeRunId) {
-      pushCompanion("agent", `Workflow stopped safely: ${error.message}`, false);
+      pushCompanion("agent", `Workflow stopped: ${error.message}`, false);
     }
   } finally {
     if (runId === activeRunId) {
@@ -9861,30 +9966,27 @@ async function runScreenScan(runId, sealed) {
     if (backendConfig.geminiConfigured && capture.thumbnail) {
       return analyzeScreenWithTaskPilot(capture.thumbnail, capture.name);
     }
-    return `TEE OCR demo scan complete for ${capture.name}. The frame was treated as ephemeral, sealed as ${sealed.payloadDigest}, and mapped to the CSV upload incident without sending raw screen data.`;
+    return `OCR scan complete. Frame sealed as ${sealed.payloadDigest}.`;
   }
   await sleep(360);
-  return `Browser demo TEE OCR complete. I would capture the visible screen only after approval, seal it as ${sealed.payloadDigest}, extract visible asks, and keep execution under your control.`;
+  return `OCR scan complete. Frame sealed as ${sealed.payloadDigest}.`;
 }
 
 async function createCompanionAnswer(intent, sealed) {
   const normalized = intent.toLowerCase();
   if (normalized.includes("what should") || normalized.includes("now")) {
     const top = activeQueue()[0] || state.prioritized[0];
-    return `Do ${top.canonicalTitle} first. It is due today, has ${top.severity} severity, and appears across ${top.sources.length} sources. TEE payload: ${sealed.payloadDigest}.`;
+    return `Do ${top.canonicalTitle} first. It is due today.`;
   }
   if (normalized.includes("autonomous scan")) {
-    return `Autonomous scan complete: ${state.flattened.length} raw signals checked, ${state.deduped.length} clean tasks produced, hidden email work extracted, and duplicate work merged. TEE payload: ${sealed.payloadDigest}.`;
-  }
-  if (normalized.includes("secure ocr") || normalized.includes("ocr") || normalized.includes("screen")) {
-    return `TEE OCR is ready. Press TEE OCR to capture the screen with an ephemeral frame, secret redaction, and approval-first execution.`;
+    return `Autonomous scan complete: ${state.flattened.length} signals checked.`;
   }
   
   // Use Gemini Chat directly if configured
   try {
     return await geminiAnswerQuery(intent, state, buildRichContext());
   } catch (err) {
-    return `${answerQuery(intent, state)} TEE payload: ${sealed.payloadDigest}.`;
+    return `${answerQuery(intent, state)}`;
   }
 }
 
@@ -9897,8 +9999,8 @@ async function runStep(runId, id, status, label) {
 function stopProcessing() {
   activeRunId += 1;
   isProcessing = false;
-  currentPlanSteps = currentPlanSteps.map(step => (step.status === "running" ? { ...step, status: "error", label: "Stopped by user" } : step));
-  pushCompanion("agent", "Stopped safely. No external call or task execution continued after your stop request.");
+  currentPlanSteps = currentPlanSteps.map(step => (step.status === "running" ? { ...step, status: "error", label: "Stopped" } : step));
+  pushCompanion("agent", "Workflow stopped.");
 }
 
 function autoResize(input) {
@@ -9933,7 +10035,7 @@ function pushCompanion(role, text, doRender = true) {
   if (typeof text === "object" && text !== null) {
     entry = { role, text: text.html || "", html: text.html || "", chips: text.chips || [] };
   } else {
-    const chips = role === "agent" ? ["Top 5 tasks", "Show VP emails", "What's blocking my teammate?", "Show blockers", "Who is overloaded?"] : [];
+    const chips = role === "agent" ? ["Top 5 tasks", "Show VP emails", "Show blockers"] : [];
     entry = { role, text: text || "", chips };
   }
   companionLog.push(entry);
@@ -10077,7 +10179,7 @@ function updateDockEyes(event) {
 
 async function analyzeScreenWithTaskPilot(dataUrl, sourceName) {
   try {
-    const visionRequest = { sourceName, redactedOcrContext: "screen frame sealed by TEE; frontend does not receive TaskPilot AI key", hasFrame: Boolean(dataUrl), thumbnail: dataUrl };
+    const visionRequest = { sourceName, redactedOcrContext: "sealed frame", hasFrame: Boolean(dataUrl), thumbnail: dataUrl };
     if (window.taskPilotDesktop?.summarizeVision) {
       const result = await window.taskPilotDesktop.summarizeVision(visionRequest);
       return result.summary;
@@ -10090,7 +10192,7 @@ async function analyzeScreenWithTaskPilot(dataUrl, sourceName) {
     const visionPayload = await response.json();
     return visionPayload.summary;
   } catch (error) {
-    return `Backend TaskPilot AI service was unavailable, so I kept local prioritization active. ${error.message}`;
+    return `AI service unavailable.`;
   }
 }
 
@@ -10109,12 +10211,10 @@ async function loadUserProfile() {
       settingsProfile.email = data.profile.email || authSession.email;
     }
   } catch (err) {
-    // Backend offline — use session data
   }
 }
 
 async function loadBackendConfig() {
-  // Fast 2s timeout so the app renders immediately if backend is down
   const fetchWithTimeout = (url, opts = {}, ms = 2000) => {
     if (typeof AbortController === "undefined") return fetch(url, opts);
     const controller = new AbortController();
@@ -10273,7 +10373,7 @@ function completeTask(id) {
   const completedChatMsg = {
     id: "msg-" + Date.now() + "-" + Math.random().toString(36).substr(2, 4),
     sender: "System",
-    text: `🤖 ✓ ${settingsProfile.name} completed task ${task.id}: "${task.canonicalTitle}" (${task.severity})`,
+    text: `[Done] ${settingsProfile.name} completed task ${task.id}: "${task.canonicalTitle}" (${task.severity})`,
     isSystem: true,
     timestamp: new Date().toISOString()
   };
@@ -10367,8 +10467,8 @@ Return ONLY valid JSON: { "summary": "2-3 sentence summary", "nextDayPlan": ["po
   const originalText1 = btn1 ? btn1.innerHTML : "";
   const originalText2 = btn2 ? btn2.innerHTML : "";
 
-  if (btn1) { btn1.disabled = true; btn1.textContent = "⏳ Generating..."; }
-  if (btn2) { btn2.disabled = true; btn2.textContent = "⏳ Generating..."; }
+  if (btn1) { btn1.disabled = true; btn1.innerHTML = '<span style="display:inline-block;width:11px;height:11px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.7s linear infinite;"></span> Generating...'; }
+  if (btn2) { btn2.disabled = true; btn2.innerHTML = '<span style="display:inline-block;width:11px;height:11px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.7s linear infinite;"></span> Generating...'; }
 
   // Render the reportHTML in a hidden div, wait for fonts to load, capture using html2canvas, and download as PDF
   const tempDiv = document.createElement("div");
@@ -10469,7 +10569,7 @@ function buildReportHTML({ dateStr, completedLogs, todayMeetings, remaining, aiS
       </tbody></table>`;
 
   const meetingsSection = todayMeetings.length > 0 ? `
-    <section><h2>📅 Meetings Today</h2>
+    <section><h2>Meetings Today</h2>
       ${todayMeetings.map(m => `<div class="meeting-row">
         <div style="width:32px;height:32px;border-radius:8px;background:#ede9fe;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;">◷</div>
         <div style="flex:1;min-width:0;">
@@ -10508,13 +10608,13 @@ function buildReportHTML({ dateStr, completedLogs, todayMeetings, remaining, aiS
       <div class="meta-card"><label>Tasks Done</label><span>${completedLogs.length} today</span></div>
       <div class="meta-card"><label>Time Logged</label><span>${totalTimeStr}</span></div>
     </div>
-    <section><h2>✅ Tasks Completed Today</h2>${completedSection}</section>
+    <section><h2>Tasks Completed Today</h2>${completedSection}</section>
     ${meetingsSection}
-    <section><h2>🤖 AI Summary & Achievements</h2>
+    <section><h2>AI Summary &amp; Achievements</h2>
       <div class="ai-block">${escapeHtml(aiSummary)}</div>
       ${nextDayRecommendations ? `<div class="next-day-block"><strong>Tomorrow's focus:</strong> ${escapeHtml(nextDayRecommendations)}</div>` : ""}
     </section>
-    <section><h2>📅 Priority Focus for Tomorrow</h2>${tomorrowSection}</section>
+    <section><h2>Priority Focus for Tomorrow</h2>${tomorrowSection}</section>
     <div class="footer">
       <div style="display:flex;align-items:center;gap:8px;">
         ${logoDataUrlStr ? `<img src="${logoDataUrlStr}" style="width:16px;height:16px;border-radius:3px;object-fit:cover;">` : ""}
@@ -10546,7 +10646,7 @@ function safeRender() {
     if (app) {
       app.innerHTML = `
         <main style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#f7f4ee;font-family:Inter,system-ui,sans-serif;gap:16px;padding:40px;">
-          <div style="font-size:48px;">⚠️</div>
+          <div style="display:flex;justify-content:center;margin-bottom:8px;color:#f59e0b;"><svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg></div>
           <h2 style="margin:0;color:#152238;font-family:Outfit,sans-serif;">TaskPilot ran into a problem</h2>
           <p style="margin:0;color:#4a5568;max-width:480px;text-align:center;">${escapeHtml ? escapeHtml(err.message) : err.message}</p>
           <button onclick="localStorage.removeItem('taskpilot:session');location.reload();"

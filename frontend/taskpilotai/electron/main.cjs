@@ -119,6 +119,7 @@ function createDockWindow() {
 }
 
 function createPanelWindow() {
+  console.log("[TaskPilot] createPanelWindow() called");
   const workArea = screen.getPrimaryDisplay().workArea;
   panelWindow = new BrowserWindow({
     width: 430,
@@ -132,6 +133,7 @@ function createPanelWindow() {
     hasShadow: true,
     alwaysOnTop: true,
     skipTaskbar: true,
+    show: false,
     title: "TaskPilot Dock",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -144,7 +146,17 @@ function createPanelWindow() {
   if (process.platform === "darwin") {
     panelWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   }
-  panelWindow.loadFile(path.join(__dirname, "floating-panel.html"));
+
+  const panelPath = path.join(__dirname, "floating-panel.html");
+  console.log("[TaskPilot] Loading panel from:", panelPath);
+  panelWindow.loadFile(panelPath);
+
+  panelWindow.webContents.on("did-fail-load", (_e, code, desc) => {
+    console.error("[TaskPilot] Panel failed to load:", code, desc);
+  });
+  panelWindow.webContents.on("console-message", (_e, level, msg, line, src) => {
+    if (level >= 2) console.error(`[Panel] ${msg} (${src}:${line})`);
+  });
 }
 
 function startCursorTracking() {
@@ -155,15 +167,26 @@ function startCursorTracking() {
 }
 
 function togglePanel() {
+  console.log("[TaskPilot] togglePanel() called, panelWindow:", panelWindow ? (panelWindow.isDestroyed() ? "destroyed" : "exists") : "null");
   if (!panelWindow || panelWindow.isDestroyed()) {
     createPanelWindow();
+    // Wait for the window to finish loading before showing it
+    panelWindow.once("ready-to-show", () => {
+      console.log("[TaskPilot] Panel ready-to-show fired");
+      positionPanelNearDock();
+      panelWindow.show();
+      panelWindow.focus();
+    });
     return;
   }
-  if (panelWindow.isVisible()) {
+  const visible = panelWindow.isVisible();
+  console.log("[TaskPilot] Panel visible:", visible);
+  if (visible) {
     panelWindow.hide();
   } else {
     positionPanelNearDock();
-    panelWindow.showInactive();
+    panelWindow.show();
+    panelWindow.focus();
   }
 }
 
@@ -578,7 +601,10 @@ Please provide a concise (2-3 sentences max) summary of what tasks or errors are
         : "Top recommendation: handle the P1 upload timeout first, then review the blocked auth-token PR. No action was executed without approval."
   }));
 
-  ipcMain.on("taskpilot-floating:toggle-panel", togglePanel);
+  ipcMain.on("taskpilot-floating:toggle-panel", () => {
+    console.log("[TaskPilot] IPC toggle-panel received");
+    togglePanel();
+  });
   ipcMain.on("taskpilot-floating:hide-panel", () => panelWindow?.hide());
   ipcMain.on("taskpilot-floating:move-dock", (_event, point) => moveDockWindow(point.x, point.y));
   ipcMain.on("taskpilot-floating:restore-main", () => {
