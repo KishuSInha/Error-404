@@ -21,6 +21,13 @@ let dbWorking = [];             // active working tasks across all users from da
 let managerActivityFeed = [];  // real-time updates visible on manager dashboard
 
 function isTaskCompleted(taskId) {
+  // Only check current user's own completions for the personal queue view
+  // dbCompletions is for manager/team views only
+  return completedTaskIds.includes(taskId);
+}
+
+function isTaskCompletedByAnyUser(taskId) {
+  // Used for team-wide views (manager dashboard, analytics)
   return completedTaskIds.includes(taskId) || dbCompletions.some(r => r.task_id === taskId);
 }
 
@@ -42,10 +49,11 @@ function getWorkspaceActiveSource() {
 let state = buildState(sources, calendarBlocks);
 let selectedTaskId = state.prioritized[0]?.id;
 
-// ─── Today's Smart Queue — capacity-based (fits in 7.5 hours) ────────────────
-let todayQueue = buildTodayCapacityQueue(state.prioritized, activeProfile === "manager" ? "Manager" : (demoProfiles[activeProfile]?.name || "Utkarsh"), taskTimeLogs);
-let todayQueueGeminiScored = false; // true once Gemini has re-ranked todayQueue
-let depGraph = buildDependencyGraph(state.prioritized); // dependency graph for all tasks
+// ─── Today's Smart Queue — initialized after settingsProfile is declared ──────
+// Will be rebuilt with the real user name in loadBackendConfig().finally(...)
+let todayQueue = buildTodayCapacityQueue(state.prioritized, null, {});
+let todayQueueGeminiScored = false;
+let depGraph = buildDependencyGraph(state.prioritized);
 
 let authSession = JSON.parse(localStorage.getItem("taskpilot:session") || "null");
 if (authSession?.role) activeProfile = authSession.role;
@@ -170,6 +178,35 @@ let scanCompleteInfo = null;
 
 // Modal States
 let showAddJiraModal = false;
+let showCalendarTaskModal = false;
+
+let engineerPresenceStatus = localStorage.getItem("taskpilot:engineerPresence") || "online";
+let managerPresenceStatus = localStorage.getItem("taskpilot:managerPresence") || "online";
+let lastActivityTime = Date.now();
+let presenceHeartbeatInterval = null;
+
+// Update last activity on user interaction
+function updateLastActivity() {
+  lastActivityTime = Date.now();
+  const presenceKey = activeProfile === "manager" ? "taskpilot:managerLastActive" : "taskpilot:engineerLastActive";
+  localStorage.setItem(presenceKey, new Date().toISOString());
+}
+
+// Track user activity for presence
+document.addEventListener("mousemove", updateLastActivity);
+document.addEventListener("keydown", updateLastActivity);
+document.addEventListener("click", updateLastActivity);
+
+let showStatusSelector = false;
+let chatAttachedFile = null;
+
+window.addEventListener("storage", (e) => {
+  if (e.key === "taskpilot:engineerPresence" || e.key === "taskpilot:managerPresence" || e.key === "taskpilot:chatMessages" || e.key === "taskpilot:engineerLastActive" || e.key === "taskpilot:managerLastActive") {
+    engineerPresenceStatus = localStorage.getItem("taskpilot:engineerPresence") || "online";
+    managerPresenceStatus = localStorage.getItem("taskpilot:managerPresence") || "online";
+    render();
+  }
+});
 
 // ─── Per-user completion store (keyed by email, persisted to localStorage + Supabase) ──
 // Structure: { [email]: { completedTaskIds: [], workingTaskIds: [], completionRows: [] } }
@@ -374,6 +411,23 @@ async function startRealTimeSync() {
           addedTasks = backendState.addedTasks || addedTasks;
           reassignedTaskOwners = backendState.reassignedTaskOwners || reassignedTaskOwners;
           
+          // Apply reassignments to sources
+          if (reassignedTaskOwners && Object.keys(reassignedTaskOwners).length > 0) {
+            sources.forEach(source => {
+              source.items.forEach(item => {
+                if (reassignedTaskOwners[item.id]) {
+                  item.owner = reassignedTaskOwners[item.id];
+                }
+              });
+            });
+            
+            // Rebuild state and today queue with new assignments
+            state = buildState(sources, calendarBlocks);
+            const engineerName = activeProfile === "manager" ? "Manager" : (settingsProfile?.name || "Utkarsh");
+            todayQueue = buildTodayCapacityQueue(state.prioritized, engineerName, taskTimeLogs);
+            todayQueueGeminiScored = false;
+          }
+          
           // Re-render UI if there were changes
           render();
         }
@@ -385,6 +439,60 @@ async function startRealTimeSync() {
   }, 2000); // Sync every 2 seconds
 }
 
+// ─── Presence Heartbeat — push status to backend every 5 seconds ─────────────
+let presenceAllUsers = {}; // cached from backend: { [name]: { status, lastSeen, role } }
+
+async function pushPresenceHeartbeat() {
+  const name = settingsProfile?.name || authSession?.name || "Engineer";
+  const role = activeProfile;
+  const email = getUserEmail();
+
+  // Auto-compute status based on activity
+  const idleSince = Date.now() - lastActivityTime;
+  let status;
+  if (idleSince > 5 * 60 * 1000) {
+    // Idle for >5 min
+    status = "idle";
+  } else if (workingTaskIds.length > 0) {
+    status = "dnd";
+  } else {
+    const presenceKey = activeProfile === "manager" ? "taskpilot:managerPresence" : "taskpilot:engineerPresence";
+    status = localStorage.getItem(presenceKey) || "online";
+  }
+
+  // Update local var
+  if (activeProfile === "manager") {
+    managerPresenceStatus = status;
+  } else {
+    engineerPresenceStatus = status;
+  }
+  localStorage.setItem(activeProfile === "manager" ? "taskpilot:managerPresence" : "taskpilot:engineerPresence", status);
+  localStorage.setItem(activeProfile === "manager" ? "taskpilot:managerLastActive" : "taskpilot:engineerLastActive", new Date().toISOString());
+
+  try {
+    await fetch("http://127.0.0.1:8787/api/presence/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, status, role, email })
+    });
+
+    // Also fetch all presence data so manager can see everyone
+    const resp = await fetch("http://127.0.0.1:8787/api/presence/all");
+    if (resp.ok) {
+      const data = await resp.json();
+      presenceAllUsers = data.presence || {};
+    }
+  } catch {
+    // Backend offline — ignore silently
+  }
+}
+
+function startPresenceHeartbeat() {
+  if (presenceHeartbeatInterval) clearInterval(presenceHeartbeatInterval);
+  pushPresenceHeartbeat(); // immediate first push
+  presenceHeartbeatInterval = setInterval(pushPresenceHeartbeat, 5000);
+}
+
 function stopRealTimeSync() {
   if (stateSyncInterval) {
     clearInterval(stateSyncInterval);
@@ -392,12 +500,29 @@ function stopRealTimeSync() {
   }
 }
 
+// Register offline on page unload
+window.addEventListener("beforeunload", () => {
+  const name = settingsProfile?.name || authSession?.name || "Engineer";
+  navigator.sendBeacon("http://127.0.0.1:8787/api/presence/offline", JSON.stringify({ name }));
+});
+
+function formatLastSeen(isoStr) {
+  if (!isoStr) return "Never";
+  const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+  if (diff < 10) return "Just now";
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return new Date(isoStr).toLocaleDateString();
+}
+
+
 // ─── Navigation ───────────────────────────────────────────────────────────────
 const ENGINEER_NAV = [
   { label: "Command",      items: [["overview","Dashboard","⌂"],["today","My Tasks","◎"],["agent-scan","AI Agent","✦"]] },
   { label: "Intelligence", items: [["inbox","All Sources","✉"],["source-tree","Source Tree","🌳"],["meetings","Meetings","◷"],["my-analytics","My Analytics","▥"]] },
   { label: "My Week",      items: [["eng-calendar","My Calendar","📆"],["execution","Execution plan","✓"]] },
-  { label: "Team",         items: [["eng-portal","Team workload","📋"]] },
+  { label: "Team",         items: [["eng-portal","Team workload","📋"],["chat","Chat with Manager","💬"]] },
   { label: "Account",      items: [["settings","Settings","⚙"]] }
 ];
 
@@ -406,16 +531,10 @@ const MANAGER_NAV = [
   { label: "Intelligence", items: [
     ["inbox","All Sources","✉"],
     ["source-tree","Source Tree","🌳"],
-    ["mgr-jira","Jira Tasks","▦"],
-    ["mgr-github","GitHub PRs","⌁"],
-    ["mgr-servicenow","Incidents","△"],
-    ["mgr-email","Email Actions","📧"],
-    ["mgr-slack","Slack Mentions","💬"],
-    ["meetings","Meetings","◷"],
-    ["hidden","Hidden asks","◇"]
+    ["meetings","Meetings","◷"]
   ]},
   { label: "Genome",       items: [["genome","Sprint Genome","🧬"],["calendar-ai","CalendarAI","📆"]] },
-  { label: "Team",         items: [["team-portal","Team workload","📋"],["analytics","Analytics","▥"],["engineer-analytics","Engineer Charts","📈"]] },
+  { label: "Team",         items: [["team-portal","Team workload","📋"],["chat","Chat with Engineer","💬"],["analytics","Analytics","▥"],["engineer-analytics","Engineer Charts","📈"]] },
   { label: "Account",      items: [["settings","Settings","⚙"]] }
 ];
 
@@ -611,7 +730,8 @@ function bindLoginEvents() {
     // Restore per-user state for this email
     completedTaskIds = getMyCompletedIds();
     workingTaskIds   = getMyWorkingIds();
-    startRealTimeSync(); // Start real-time state synchronization
+    startRealTimeSync();
+    startPresenceHeartbeat();
     syncCompletionsFromSupabase().then(() => { startRealtimeSync(); safeRender(); });
     render();
   });
@@ -630,7 +750,8 @@ function bindLoginEvents() {
     syncSettingsProfileWithSession();
     completedTaskIds = getMyCompletedIds();
     workingTaskIds   = getMyWorkingIds();
-    startRealTimeSync(); // Start real-time state synchronization
+    startRealTimeSync();
+    startPresenceHeartbeat();
     syncCompletionsFromSupabase().then(() => { startRealtimeSync(); safeRender(); });
     render();
   });
@@ -682,12 +803,135 @@ function bindLoginEvents() {
   });
 }
 
+// ─── Presence Helper Functions ───────────────────────────────────────────────
+function getPresenceForUser(name) {
+  // Check backend presence store first (real-time)
+  if (name && presenceAllUsers[name]) {
+    const p = presenceAllUsers[name];
+    const diffMs = Date.now() - new Date(p.lastSeen);
+    // If last heartbeat > 15s ago, treat as offline
+    if (diffMs > 15000 && p.status !== "offline") {
+      return { status: "offline", lastSeen: p.lastSeen };
+    }
+    return { status: p.status, lastSeen: p.lastSeen };
+  }
+  // Fallback to localStorage for own status
+  const lastActiveStr = localStorage.getItem("taskpilot:engineerLastActive");
+  if (!lastActiveStr) return { status: "offline", lastSeen: null };
+  const diffMs = Date.now() - new Date(lastActiveStr);
+  if (diffMs > 15000) return { status: "offline", lastSeen: lastActiveStr };
+  return { status: localStorage.getItem("taskpilot:engineerPresence") || "online", lastSeen: lastActiveStr };
+}
+
+function getEngineerStatusText() {
+  const name = settingsProfile?.name;
+  return getPresenceForUser(name).status;
+}
+
+function getStatusColor(status) {
+  return status === "online" ? "#23a55a" : status === "idle" ? "#f0b232" : status === "dnd" ? "#f23f43" : "#80848e";
+}
+
+function getStatusLabel(status) {
+  return status === "dnd" ? "Do Not Disturb" : status === "offline" ? "Offline" : status === "invisible" ? "Invisible" : status === "idle" ? "Idle" : "Online";
+}
+
+function updateAutoPresenceStatus() {
+  const now = new Date();
+  const hour = now.getHours();
+  // Working hours: 9 AM to 5 PM (9:00 - 17:00)
+  const isWorkingHours = hour >= 9 && hour < 17;
+  
+  // Check if current user has any active tasks
+  const hasActiveTasks = workingTaskIds.length > 0;
+  
+  const targetStatus = hasActiveTasks ? "dnd" : (isWorkingHours ? "online" : "idle");
+  
+  if (activeProfile === "manager") {
+    if (managerPresenceStatus !== targetStatus) {
+      managerPresenceStatus = targetStatus;
+      localStorage.setItem("taskpilot:managerPresence", targetStatus);
+    }
+  } else {
+    // If engineer is active, update last active timestamp
+    localStorage.setItem("taskpilot:engineerLastActive", new Date().toISOString());
+    if (engineerPresenceStatus !== targetStatus) {
+      engineerPresenceStatus = targetStatus;
+      localStorage.setItem("taskpilot:engineerPresence", targetStatus);
+    }
+  }
+}
+
+function startWorkingOnTask(id) {
+  if (!workingTaskIds.includes(id)) workingTaskIds = [...workingTaskIds, id];
+  setMyWorkingIds([...new Set([...getMyWorkingIds(), id])]);
+  const task = state.prioritized.find(t => t.id === id);
+  if (task && !taskTimeLogs[id]) {
+    taskTimeLogs[id] = {
+      title: task.canonicalTitle,
+      severity: task.severity,
+      source: task.sources?.join(" + ") || task.sourceId,
+      startTime: new Date().toISOString(),
+      endTime: null
+    };
+  }
+  if (task) saveWorkingTask(getUserEmail(), getUserName(), id, task.canonicalTitle);
+  if (task) pushCompanion("agent", `Woof! 🐾 Started working on "${task.canonicalTitle}". I'll keep my eyes on your progress and help you fetch results! Ruff!`, false);
+  
+  // Append system message to chat automatically: inform the manager
+  const userDisplayName = settingsProfile.name || (activeProfile === "manager" ? "Manager" : "Engineer");
+  if (task) {
+    const startedChatMsg = {
+      id: "msg-" + Date.now() + "-" + Math.random().toString(36).substr(2, 4),
+      sender: "System",
+      text: `🤖 ⏳ ${userDisplayName} started working on task ${task.id}: "${task.canonicalTitle}" (${task.severity})`,
+      isSystem: true,
+      timestamp: new Date().toISOString()
+    };
+    const currentChatMessages = JSON.parse(localStorage.getItem("taskpilot:chatMessages") || "[]");
+    currentChatMessages.push(startedChatMsg);
+    localStorage.setItem("taskpilot:chatMessages", JSON.stringify(currentChatMessages));
+  }
+  
+  // Update status automatically
+  updateAutoPresenceStatus();
+}
+
+function stopWorkingOnTask(id) {
+  workingTaskIds = workingTaskIds.filter(x => x !== id);
+  setMyWorkingIds(getMyWorkingIds().filter(x => x !== id));
+  deleteWorkingTask(getUserEmail(), id);
+  delete taskTimeLogs[id];
+  
+  // Append system message to chat automatically: inform the manager
+  const task = state.prioritized.find(t => t.id === id);
+  const userDisplayName = settingsProfile.name || (activeProfile === "manager" ? "Manager" : "Engineer");
+  if (task) {
+    const stoppedChatMsg = {
+      id: "msg-" + Date.now() + "-" + Math.random().toString(36).substr(2, 4),
+      sender: "System",
+      text: `🤖 ⏸ ${userDisplayName} stopped/paused working on task ${task.id}: "${task.canonicalTitle}"`,
+      isSystem: true,
+      timestamp: new Date().toISOString()
+    };
+    const currentChatMessages = JSON.parse(localStorage.getItem("taskpilot:chatMessages") || "[]");
+    currentChatMessages.push(stoppedChatMsg);
+    localStorage.setItem("taskpilot:chatMessages", JSON.stringify(currentChatMessages));
+  }
+
+  // Update status automatically
+  updateAutoPresenceStatus();
+}
+
 // ─── Rendering Layout ─────────────────────────────────────────────────────────
 function render() {
   if (!authSession) {
     renderLogin();
     return;
   }
+
+  // Update auto status on render
+  updateAutoPresenceStatus();
 
   const queue = activeQueue();
   const selected = queue.find(t => t.id === selectedTaskId) || queue[0] || state.prioritized[0];
@@ -734,16 +978,7 @@ function render() {
           ${renderNavigation()}
         </nav>
 
-        ${activeProfile === "manager" ? `
-        <section class="panel compact tee-card">
-          <p class="eyebrow">Security</p>
-          <h2>Trusted execution enabled</h2>
-          <div class="tee-meter">
-            <span style="width:${teeSession.trustScore}%"></span>
-          </div>
-          <p class="small">OCR and execution actions stay approval-gated.</p>
-        </section>
-        ` : ""}
+         ${renderDiscordUserPanel()}
       </aside>
 
       <section class="workspace">
@@ -770,6 +1005,8 @@ function render() {
     ${renderCompanionDock()}
     ${renderCalendarPermissionModal()}
     ${renderAddJiraModal()}
+    ${renderCalendarTaskModal()}
+    ${renderFilePreviewModal()}
   `;
 
   bindEvents();
@@ -987,6 +1224,8 @@ function renderPageContent(selected, executionBrief, dynamicPlan) {
       return renderTeamPortalPage();
     case "eng-portal":
       return renderEngineerPortalPage();
+    case "chat":
+      return renderChatPage();
     case "settings":
       return renderSettingsDashboard();
     default:
@@ -1695,7 +1934,7 @@ function renderCalendarTaskDetails(task, engineers) {
         <span style="font-size:40px; margin-bottom:8px;">🎯</span>
         <h3 style="font-size:15px; color:#1e293b; margin:0; font-weight:700;">No Task Selected</h3>
         <p style="font-size:12px; color:#64748b; max-width:240px; margin:0; line-height:1.5;">
-          Click on any task block in the weekly calendar grid or engineer schedule to reassign, adjust priority, or view detailed AI metrics.
+          Click on any task block in the weekly calendar grid to reassign, adjust priority, or view detailed AI metrics.
         </p>
       </div>
     `;
@@ -1763,6 +2002,520 @@ function renderCalendarTaskDetails(task, engineers) {
         </p>
       </div>
 
+    </div>
+  `;
+}
+
+let activePreviewMessageId = null;
+
+function getStatusSVG(status) {
+  if (status === "online") {
+    return `<svg viewBox="0 0 10 10" width="10" height="10"><circle cx="5" cy="5" r="5" fill="#23a55a"/></svg>`;
+  } else if (status === "idle") {
+    return `<svg viewBox="0 0 10 10" width="10" height="10"><path d="M7.5 5.5A3.5 3.5 0 1 1 6.3 2.1 4 4 0 0 0 7.5 5.5z" fill="#f0b232"/></svg>`;
+  } else if (status === "dnd") {
+    return `<svg viewBox="0 0 10 10" width="10" height="10"><circle cx="5" cy="5" r="5" fill="#f23f43"/><rect x="2" y="4.2" width="6" height="1.6" rx="0.5" fill="#fff"/></svg>`;
+  } else {
+    return `<svg viewBox="0 0 10 10" width="10" height="10"><circle cx="5" cy="5" r="3.8" stroke="#80848e" stroke-width="2.2" fill="none"/></svg>`;
+  }
+}
+
+function renderDiscordUserPanel() {
+  const currentStatus = activeProfile === "manager" ? managerPresenceStatus : engineerPresenceStatus;
+  const displayName = settingsProfile?.name || "Utkarsh Sinha";
+  const nameInitial = displayName ? displayName[0] : "U";
+
+  return `
+    <div class="discord-user-panel" style="margin-top:auto; padding:10px; background:#e6decb; border-radius:12px; border:1px solid #dcd5c6; display:flex; align-items:center; justify-content:space-between; position:relative; gap:8px; font-family:'Outfit', sans-serif;">
+      <!-- Avatar and Info -->
+      <div style="display:flex; align-items:center; gap:8px; cursor:pointer; flex:1; min-width:0;" id="openStatusSelectorBtn">
+        <div style="position:relative; width:36px; height:36px; flex-shrink:0;">
+          <div style="width:100%; height:100%; border-radius:50%; background:#152238; color:#fff; display:grid; place-items:center; font-weight:800; font-size:15px; text-transform:uppercase;">
+            ${nameInitial}
+          </div>
+          <!-- Cutout status badge -->
+          <div style="position:absolute; bottom:-3px; right:-3px; width:15px; height:15px; border-radius:50%; background:#efe9dd; display:grid; place-items:center; box-shadow:0 0 0 2px #efe9dd;">
+            ${getStatusSVG(currentStatus)}
+          </div>
+        </div>
+        <div style="min-width:0; line-height:1.2;">
+          <div style="font-size:12.5px; font-weight:800; color:#17202a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+            ${escapeHtml(displayName.split(" ")[0])}
+          </div>
+          <div style="font-size:10px; color:#65717d; text-transform:capitalize; font-weight:600;">
+            ${currentStatus === "dnd" ? "Do Not Disturb" : currentStatus}
+          </div>
+        </div>
+      </div>
+
+      <!-- Decorative and Controls -->
+      <div style="display:flex; align-items:center; gap:4px; color:#475569;">
+        <button style="background:none; border:none; padding:4px; cursor:pointer; font-size:14px; opacity:0.75;" onclick="alert('Mic muted');" title="Mute Mic">🎙️</button>
+        <button style="background:none; border:none; padding:4px; cursor:pointer; font-size:14px; opacity:0.75;" onclick="alert('Audio deafened');" title="Deafen Audio">🎧</button>
+        <button style="background:none; border:none; padding:4px; cursor:pointer; font-size:14px; opacity:0.75;" id="panelSettingsBtn" title="Settings">⚙️</button>
+      </div>
+
+      <!-- Popup selector menu -->
+      ${showStatusSelector ? `
+        <div id="presenceStatusMenu" style="position:absolute; bottom:52px; left:0; width:170px; background:#fff; border:1px solid #dcd5c6; border-radius:10px; box-shadow:0 10px 25px rgba(0,0,0,0.15); z-index:999; padding:6px; display:grid; gap:4px;">
+          ${[
+            { id: "online", label: "Online", clr: "#23a55a" },
+            { id: "idle", label: "Idle", clr: "#f0b232" },
+            { id: "dnd", label: "Do Not Disturb", clr: "#f23f43" },
+            { id: "invisible", label: "Invisible", clr: "#80848e" }
+          ].map(st => `
+            <button class="status-option-btn" data-status="${st.id}" style="display:flex; align-items:center; gap:8px; width:100%; border:none; background:none; padding:6px 8px; border-radius:6px; cursor:pointer; text-align:left; font-size:11.5px; font-weight:700; color:#334155; transition:background 0.15s;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='none'">
+              <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${st.clr};"></span>
+              <span>${st.label}</span>
+            </button>
+          `).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderChatPage() {
+  const otherRole = activeProfile === "manager" ? "Engineer" : "Manager";
+  const otherStatus = activeProfile === "manager" ? engineerPresenceStatus : managerPresenceStatus;
+  
+  let chatMessages = JSON.parse(localStorage.getItem("taskpilot:chatMessages") || "[]");
+
+  return `
+    <div style="padding:24px; max-width:1100px; margin:0 auto; font-family:'Outfit', sans-serif; height:calc(100vh - 120px); display:flex; flex-direction:column; gap:20px;">
+      
+      <!-- Top Recipient Header Card -->
+      <div style="background:#fff; border:1px solid #ded5c8; border-radius:16px; padding:16px 24px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 4px 12px rgba(0,0,0,0.015); flex-shrink:0;">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <div style="position:relative; width:44px; height:44px;">
+            <div style="width:100%; height:100%; border-radius:50%; background:#152238; color:#fff; display:grid; place-items:center; font-weight:800; font-size:18px;">
+              ${otherRole[0]}
+            </div>
+            <!-- Recipient status cutout -->
+            <div style="position:absolute; bottom:-3px; right:-3px; width:16px; height:16px; border-radius:50%; background:#fff; display:grid; place-items:center; box-shadow:0 0 0 2px #fff;">
+              ${getStatusSVG(otherStatus)}
+            </div>
+          </div>
+          <div>
+            <h2 style="margin:0; font-size:17px; font-weight:800; color:#0f172a; display:flex; align-items:center; gap:8px;">
+              Chat with ${otherRole}
+            </h2>
+            <p style="margin:2px 0 0; font-size:12px; color:#64748b; font-weight:600; text-transform:capitalize;">
+              Status: ${otherStatus === "dnd" ? "Do Not Disturb" : otherStatus}
+            </p>
+          </div>
+        </div>
+        
+        <!-- Quick Action Info -->
+        <div style="font-size:12px; color:#64748b; background:#f1f5f9; padding:6px 12px; border-radius:8px; font-weight:600;">
+          Direct communication channel &middot; End-to-end local logs
+        </div>
+      </div>
+
+      <!-- Messages History Area -->
+      <div id="chatMessagesArea" style="flex:1; background:#fff; border:1px solid #ded5c8; border-radius:16px; padding:20px; overflow-y:auto; display:flex; flex-direction:column; gap:16px; box-shadow:0 4px 12px rgba(0,0,0,0.015);">
+        ${chatMessages.length === 0 ? `
+          <div style="margin:auto; text-align:center; color:#94a3b8; max-width:320px; display:flex; flex-direction:column; align-items:center; gap:12px;">
+            <span style="font-size:48px;">💬</span>
+            <h3 style="margin:0; font-size:15px; color:#475569; font-weight:700;">No Messages Yet</h3>
+            <p style="margin:0; font-size:12px; line-height:1.5;">Start the conversation below! Tasks completed by the engineer will automatically notify the manager here.</p>
+          </div>
+        ` : chatMessages.map(msg => {
+          const isSystem = msg.isSystem;
+          const timeStr = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const isMe = msg.sender === (activeProfile === "manager" ? "Manager" : "Engineer");
+          
+          if (isSystem) {
+            return `
+              <div style="background:#f0fdf4; border:1px dashed #bbf7d0; border-radius:12px; padding:10px 16px; font-size:12.5px; color:#166534; display:flex; align-items:center; gap:10px; align-self:center; max-width:85%;">
+                <span style="font-size:15px;">🤖</span>
+                <span style="font-weight:600; line-height:1.4;">${msg.text}</span>
+                <span style="font-size:10px; color:#85a894; margin-left:8px; font-weight:500;">${timeStr}</span>
+              </div>
+            `;
+          }
+
+          const senderInitial = msg.sender[0];
+          const senderStatus = msg.sender === "Manager" ? managerPresenceStatus : engineerPresenceStatus;
+
+          return `
+            <div style="display:flex; gap:12px; align-self:${isMe ? 'flex-end' : 'flex-start'}; max-width:75%; flex-direction:${isMe ? 'row-reverse' : 'row'};">
+              <!-- Avatar -->
+              <div style="position:relative; width:34px; height:34px; flex-shrink:0;">
+                <div style="width:100%; height:100%; border-radius:50%; background:${isMe ? '#152238' : '#64748b'}; color:#fff; display:grid; place-items:center; font-weight:800; font-size:13px; text-transform:uppercase;">
+                  ${senderInitial}
+                </div>
+                <div style="position:absolute; bottom:-2px; right:-2px; width:12px; height:12px; border-radius:50%; background:#fff; display:grid; place-items:center; box-shadow:0 0 0 1.5px #fff;">
+                  ${getStatusSVG(senderStatus)}
+                </div>
+              </div>
+              
+              <!-- Content -->
+              <div style="display:flex; flex-direction:column; align-items:${isMe ? 'flex-end' : 'flex-start'};">
+                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:11px; font-weight:700; color:#64748b;">
+                  <span>${msg.sender}</span>
+                  <span>&bull;</span>
+                  <span>${timeStr}</span>
+                </div>
+                <div style="background:${isMe ? '#152238' : '#f1f5f9'}; color:${isMe ? '#fff' : '#1e293b'}; padding:10px 14px; border-radius:12px; font-size:13.5px; line-height:1.45; word-break:break-word; box-shadow:0 1px 2px rgba(0,0,0,0.05);">
+                  ${escapeHtml(msg.text)}
+                  
+                  <!-- File Attachment -->
+                  ${msg.fileData ? `
+                    <div class="chat-file-card" style="margin-top:8px; background:${isMe ? 'rgba(255,255,255,0.1)' : '#fff'}; border:1px solid ${isMe ? 'rgba(255,255,255,0.2)' : '#e2e8f0'}; border-radius:8px; padding:8px 12px; display:flex; align-items:center; gap:10px; min-width:200px;">
+                      <span style="font-size:24px;">📕</span>
+                      <div style="flex:1; min-width:0; line-height:1.25;">
+                        <div style="font-size:12px; font-weight:700; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; color:${isMe ? '#fff' : '#1e293b'};">${escapeHtml(msg.fileData.name)}</div>
+                        <div style="font-size:10px; color:${isMe ? '#cbd5e1' : '#64748b'};">${msg.fileData.type || 'Document'}</div>
+                      </div>
+                      <button class="chat-download-btn" data-file-id="${msg.id}" style="border:none; background:rgba(14,165,233,0.15); color:${isMe ? '#38bdf8' : '#0284c7'}; font-size:11px; padding:4px 8px; border-radius:5px; font-weight:800; cursor:pointer;">
+                        Open
+                      </button>
+                    </div>
+                  ` : ""}
+                </div>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+
+      <!-- Chat Bottom Input Panel -->
+      <div style="background:#fff; border:1px solid #ded5c8; border-radius:16px; padding:12px; display:grid; gap:8px; box-shadow:0 4px 12px rgba(0,0,0,0.015); flex-shrink:0;">
+        
+        <!-- Selected attachment preview, if any -->
+        <div id="chatAttachmentPreview" style="display:none; align-items:center; justify-content:space-between; background:#fafafa; border:1px dashed #cbd5e1; border-radius:8px; padding:6px 12px; font-size:12px; color:#475569;">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span>📎 Attached:</span>
+            <strong id="chatAttachedFileName">file.pdf</strong>
+          </div>
+          <button id="clearChatAttachmentBtn" style="border:none; background:none; color:#ef4444; font-weight:800; cursor:pointer;">Remove</button>
+        </div>
+
+        <!-- Toolbar / Quick Action Buttons -->
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; gap:8px;">
+            <input type="file" id="chatFileInput" style="display:none;" accept=".pdf,.txt,.doc,.docx,.png,.jpg">
+            <button id="attachFileBtn" style="background:#f1f5f9; border:none; color:#475569; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:700; display:flex; align-items:center; gap:6px; cursor:pointer;" title="Attach File/PDF">
+              <span>📎</span> Attach File
+            </button>
+            <button id="quickAttachReportBtn" style="background:#f1f5f9; border:none; color:#0f766e; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:700; display:flex; align-items:center; gap:6px; cursor:pointer;" title="Auto-generate and attach sprint summary PDF">
+              <span>📊</span> Quick Attach EOD PDF
+            </button>
+          </div>
+          <div style="font-size:11px; color:#94a3b8; font-weight:500;">
+            Press Enter to Send
+          </div>
+        </div>
+
+        <!-- Input textarea and Send Button -->
+        <div style="display:flex; gap:10px; align-items:center;">
+          <textarea id="chatMessageInput" rows="1" placeholder="Type a message..." style="flex:1; border:1px solid #cbd5e1; border-radius:10px; padding:10px 14px; font-size:13.5px; outline:none; resize:none; font-family:inherit; max-height:80px;"></textarea>
+          <button id="sendChatMessageBtn" class="primary" style="padding:10px 20px; font-size:13px; font-weight:800; border-radius:10px; border:none; cursor:pointer; height:38px; display:flex; align-items:center; justify-content:center;">
+            Send
+          </button>
+        </div>
+      </div>
+      
+    </div>
+  `;
+}
+
+function renderFilePreviewModal() {
+  if (!activePreviewMessageId) return "";
+  let chatMessages = JSON.parse(localStorage.getItem("taskpilot:chatMessages") || "[]");
+  const msg = chatMessages.find(m => m.id === activePreviewMessageId);
+  if (!msg || !msg.fileData) return "";
+
+  return `
+    <div style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); backdrop-filter:blur(4px); z-index:9999; display:grid; place-items:center;" id="filePreviewModalOverlay">
+      <div class="panel" style="background:#fff; width:650px; height:80vh; padding:24px; border-radius:16px; box-shadow:0 20px 40px rgba(0,0,0,0.35); display:flex; flex-direction:column; gap:16px; border:1px solid #e2e8f0; font-family:'Outfit', sans-serif;" onclick="event.stopPropagation()">
+        
+        <!-- Header -->
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f1f5f9; padding-bottom:12px; flex-shrink:0;">
+          <div>
+            <span style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:#0284c7;">Document Viewer</span>
+            <h3 style="margin:4px 0 0 0; font-size:16px; font-weight:800; color:#0f172a;">${escapeHtml(msg.fileData.name)}</h3>
+          </div>
+          <button id="closePreviewModalBtn" style="background:#f1f5f9; border:none; color:#64748b; font-size:16px; cursor:pointer; width:28px; height:28px; border-radius:50%; display:grid; place-items:center;">✕</button>
+        </div>
+
+        <!-- PDF/Text Content Body -->
+        <div style="flex:1; overflow-y:auto; padding:20px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:12px; font-family:'Inter', sans-serif; font-size:13px; line-height:1.6; color:#334155;">
+          ${msg.fileData.name.endsWith(".pdf") ? `
+            <div style="border-bottom:2px solid #ef4444; padding-bottom:12px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:18px; font-weight:900; color:#ef4444;">📕 PDF DOCUMENT</span>
+              <span style="font-size:11px; color:#64748b; font-weight:700;">TaskPilot Auto-Report</span>
+            </div>
+            <h2 style="margin:0 0 16px 0; font-size:18px; font-weight:800; color:#0f172a; font-family:'Outfit', sans-serif;">End of Day (EOD) Sprint Summary Report</h2>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:20px; font-size:12px; background:#fff; padding:12px; border-radius:8px; border:1px solid #e2e8f0;">
+              <div><strong>Generated By:</strong> ${msg.sender}</div>
+              <div><strong>Date:</strong> 2026-06-22</div>
+              <div><strong>Sprint Status:</strong> Active (7.5h daily limit)</div>
+              <div><strong>Status:</strong> Attested TEE Envelope</div>
+            </div>
+            
+            <p>This PDF summary contains the compiled sprint workload metrics, active status logs, and task completions attested inside the secure hardware environment.</p>
+            
+            <h4 style="margin:16px 0 8px; color:#0f172a;">Sprint Velocity Metrics</h4>
+            <ul style="margin:0; padding-left:20px;">
+              <li>Total tasks scheduled this week: <strong>14 tasks</strong></li>
+              <li>Completed tasks status rate: <strong>100% SLA met</strong></li>
+              <li>Active work sessions: <strong>2 active items</strong></li>
+            </ul>
+
+            <h4 style="margin:16px 0 8px; color:#0f172a;">System Approvals & Signatures</h4>
+            <p style="font-style:italic; font-size:12px; color:#64748b; background:#f1f5f9; padding:8px; border-radius:6px;">
+              Verification hash: sha256-a1f9e2bc843...<br>
+              Signature: attested-trusted-execution-complete
+            </p>
+          ` : `
+            <div style="white-space:pre-wrap; font-family:monospace;">${escapeHtml(msg.text || "Plain text attachment contents...")}</div>
+          `}
+        </div>
+
+        <!-- Footer Actions -->
+        <div style="display:flex; justify-content:flex-end; gap:10px; flex-shrink:0; border-top:1px solid #f1f5f9; padding-top:12px;">
+          <a href="${msg.fileData.dataUrl || '#'}" download="${msg.fileData.name}" style="text-decoration:none; background:#10b981; color:#fff; font-size:12px; padding:8px 16px; border-radius:8px; font-weight:800; display:flex; align-items:center; gap:6px;">
+            📥 Download Document
+          </a>
+          <button class="secondary" id="closePreviewModalBtn2" style="font-size:12px; padding:8px 16px; border-radius:8px;">
+            Close
+          </button>
+        </div>
+
+      </div>
+    </div>
+  `;
+}
+
+function getEngineerStatusSummary(engineerName) {
+  if (!engineerName || engineerName === "Unassigned") {
+    return {
+      tasksCount: 0,
+      projectCount: 0,
+      projectsList: [],
+      totalMinutes: 0,
+      isAtCapacity: false,
+      loadPercentage: 0,
+      canBeAssigned: true,
+      overflowCount: 0
+    };
+  }
+
+  // Find all active tasks for this engineer
+  const activeTasks = state.prioritized.filter(t => t.owner === engineerName && !isTaskCompleted(t.id));
+  
+  // Find all projects (sources) they are assigned to
+  const projectMap = {
+    JIRA: "Jira",
+    GH: "GitHub",
+    SN: "ServiceNow",
+    MAIL: "Email",
+    SLACK: "Slack",
+    MEET: "Meetings"
+  };
+  const uniqueProjects = [...new Set(activeTasks.map(t => {
+    const prefix = t.id.split('-')[0];
+    return projectMap[prefix.toUpperCase()] || prefix;
+  }))];
+  const projectCount = uniqueProjects.length;
+
+  // Let's compute their total workload time in minutes
+  const avgTimes = {};
+  for (const [id, log] of Object.entries(taskTimeLogs)) {
+    if (!log.endTime || !log.startTime) continue;
+    const mins = Math.round((new Date(log.endTime) - new Date(log.startTime)) / 60000);
+    const task = state.prioritized.find(t => t.id === id);
+    const owner = task?.owner || "Unknown";
+    if (!avgTimes[owner]) avgTimes[owner] = { total: 0, count: 0 };
+    avgTimes[owner].total += mins;
+    avgTimes[owner].count += 1;
+  }
+  const avgMin = avgTimes[engineerName]
+    ? Math.round(avgTimes[engineerName].total / avgTimes[engineerName].count)
+    : null;
+
+  const sevMins = { P1: 90, P2: 120, P3: 180, P4: 240 };
+  let totalMin = 0;
+  activeTasks.forEach(task => {
+    totalMin += avgMin || sevMins[task.severity] || 120;
+  });
+
+  // Calculate overflow
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date("2026-06-21");
+    d.setDate(d.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+  const DAILY_CAPACITY = 450;
+  const dayLoad = {};
+  days.forEach(d => dayLoad[d] = 0);
+  
+  let overflowCount = 0;
+  activeTasks.forEach(task => {
+    const estMin = avgMin || sevMins[task.severity] || 120;
+    const deadline = task.due || days[days.length - 1];
+    let slot = null;
+    for (const d of days) {
+      if (d <= deadline && dayLoad[d] + estMin <= DAILY_CAPACITY) {
+        slot = d;
+        break;
+      }
+    }
+    if (!slot) {
+      for (const d of days) {
+        if (dayLoad[d] + estMin <= DAILY_CAPACITY) {
+          slot = d;
+          break;
+        }
+      }
+    }
+    if (slot) {
+      dayLoad[slot] += estMin;
+    } else {
+      overflowCount++;
+    }
+  });
+
+  const loadPercentage = Math.min(100, Math.round((totalMin / 3150) * 100));
+  const isAtCapacity = overflowCount > 0 || loadPercentage >= 85;
+
+  return {
+    tasksCount: activeTasks.length,
+    projectCount,
+    projectsList: uniqueProjects,
+    totalMinutes: totalMin,
+    isAtCapacity,
+    loadPercentage,
+    canBeAssigned: !isAtCapacity,
+    overflowCount
+  };
+}
+
+function renderCalendarTaskModal() {
+  if (!showCalendarTaskModal || !selectedTaskId) return "";
+  const task = state.prioritized.find(t => t.id === selectedTaskId);
+  if (!task) return "";
+
+  const TEAM_MEMBERS = ["Utkarsh", "Meera", "Riya", "Rohan", "Neha", "Aisha", "Sanya", "Arjun", "Vikram", "Karan"];
+  const currentOwner = task.owner || "Unassigned";
+
+  // Check severity color
+  const SEV_BG = { P1: "#fee2e2", P2: "#ffedd5", P3: "#ccfbf1", P4: "#f1f5f9" };
+  const SEV_COLOR = { P1: "#ef4444", P2: "#f97316", P3: "#0d9488", P4: "#64748b" };
+
+  const isDone = isTaskCompleted(task.id);
+  const isWorking = isTaskWorking(task.id);
+
+  // How many projects the currently selected task owner is assigned:
+  const ownerSummary = getEngineerStatusSummary(currentOwner);
+
+  return `
+    <div style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:999; display:grid; place-items:center;" id="calTaskModalOverlay">
+      <div class="panel" style="background:#fff; width:520px; padding:24px; border-radius:16px; box-shadow:0 20px 40px rgba(0,0,0,0.2); display:grid; gap:16px; border:1px solid #e2e8f0; font-family:'Outfit', sans-serif;" onclick="event.stopPropagation()">
+        
+        <!-- Header -->
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #f1f5f9; padding-bottom:12px;">
+          <div>
+            <span style="font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:#1e293b;">Task Allocation Details</span>
+            <h3 style="margin:4px 0 0 0; font-size:18px; font-weight:800; color:#0f172a;">${escapeHtml(task.id)}</h3>
+          </div>
+          <button id="closeCalTaskModalBtn" style="background:#f1f5f9; border:none; color:#64748b; font-size:16px; cursor:pointer; width:28px; height:28px; border-radius:50%; display:grid; place-items:center; transition:background 0.2s;">✕</button>
+        </div>
+
+        <!-- Task Title & Meta -->
+        <div>
+          <h4 style="margin:0 0 8px; font-size:15px; color:#0f172a; font-weight:700; line-height:1.4;">${escapeHtml(task.canonicalTitle || task.title)}</h4>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
+            <span style="font-size:9px; font-weight:800; padding:2.5px 7px; border-radius:5px; background:${SEV_BG[task.severity] || "#f1f5f9"}; color:${SEV_COLOR[task.severity] || "#475569"};">${task.severity}</span>
+            <span style="font-size:10px; font-weight:600; padding:2.5px 7px; border-radius:5px; background:#f1f5f9; color:#475569;">📅 Due ${formatDue(task.due)}</span>
+            <span style="font-size:10px; font-weight:600; padding:2.5px 7px; border-radius:5px; background:#f1f5f9; color:#475569;">⭐ Priority Score ${task.score}</span>
+            ${isDone ? `<span style="font-size:10px; font-weight:700; padding:2.5px 7px; border-radius:5px; background:#dcfce7; color:#166534;">✓ Completed</span>` : ""}
+          </div>
+          <p style="font-size:12.5px; color:#475569; margin:0; line-height:1.55;">${escapeHtml(task.body || task.description || "No description provided.")}</p>
+        </div>
+
+        <!-- Working & Appointment Status -->
+        <div style="background:#f8fafc; border-radius:12px; padding:14px; border:1px solid #e2e8f0; display:grid; gap:10px;">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <span style="font-size:12px; font-weight:700; color:#475569;">👤 Assigned Engineer:</span>
+            <span style="font-size:12.5px; font-weight:800; color:#0f172a;">
+              ${currentOwner !== "Unassigned" && currentOwner !== "" ? `👤 ${currentOwner}` : "⚠️ Unassigned"}
+            </span>
+          </div>
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <span style="font-size:12px; font-weight:700; color:#475569;">Appointment Status:</span>
+            <span style="font-size:11px; font-weight:800; padding:3px 8px; border-radius:999px; background:${(currentOwner !== "Unassigned" && currentOwner !== "") ? "#e0f2fe" : "#fee2e2"}; color:${(currentOwner !== "Unassigned" && currentOwner !== "") ? "#0369a1" : "#b91c1c"};">
+              ${(currentOwner !== "Unassigned" && currentOwner !== "") ? "Appointed to Task" : "Not Appointed"}
+            </span>
+          </div>
+          <div style="display:flex; align-items:center; justify-content:space-between; border-top:1px solid #e2e8f0; padding-top:10px;">
+            <span style="font-size:12px; font-weight:700; color:#475569;">Activity/Working Status:</span>
+            <span style="font-size:11px; font-weight:800; padding:3px 8px; border-radius:999px; background:${isWorking ? "#ccfbf1" : "#f1f5f9"}; color:${isWorking ? "#0f766e" : "#475569"};">
+              ${isWorking ? "● Active (Currently Working)" : "○ Inactive (Not Active)"}
+            </span>
+          </div>
+          ${(currentOwner !== "Unassigned" && currentOwner !== "") ? `
+            <div style="display:flex; align-items:center; justify-content:space-between; border-top:1px solid #e2e8f0; padding-top:10px;">
+              <span style="font-size:11px; color:#64748b;">${currentOwner}'s workload summary:</span>
+              <span style="font-size:11.5px; font-weight:700; color:#475569; text-align:right;">
+                Assigned to ${ownerSummary.tasksCount} task${ownerSummary.tasksCount !== 1 ? 's' : ''} across ${ownerSummary.projectCount} project${ownerSummary.projectCount !== 1 ? 's' : ''} (${ownerSummary.projectsList.join(", ") || "None"})
+              </span>
+            </div>
+          ` : ""}
+        </div>
+
+        <!-- Manager Controls -->
+        <div style="display:grid; gap:12px;">
+          <!-- Reassign Owner -->
+          <div>
+            <label style="display:block; font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px;">Reassign Owner</label>
+            <div style="display:flex; gap:8px;">
+              <select id="modalReassignSelect" style="flex:1; padding:9px 12px; border-radius:8px; border:1px solid #cbd5e1; background:#fff; font-size:13px; font-weight:500; color:#1e293b; outline:none;">
+                <option value="Unassigned" ${currentOwner === "Unassigned" || currentOwner === "" ? "selected" : ""}>Unassigned</option>
+                ${TEAM_MEMBERS.map(m => `
+                  <option value="${m}" ${m === currentOwner ? "selected" : ""}>${m}</option>
+                `).join("")}
+              </select>
+              <button id="modalReassignBtn" class="primary" style="padding:9px 16px; font-size:12px; font-weight:800; border-radius:8px; border:none; cursor:pointer;">
+                Reassign
+              </button>
+            </div>
+          </div>
+
+          <!-- Adjust Severity -->
+          <div>
+            <label style="display:block; font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px;">Update Severity</label>
+            <div style="display:flex; gap:6px;">
+              ${["P1", "P2", "P3", "P4"].map(sev => `
+                <button class="modal-sev-btn" data-sev="${sev}" style="flex:1; padding:8px 6px; font-size:11px; font-weight:800; border-radius:6px; border:1px solid ${task.severity === sev ? SEV_COLOR[sev] : "#cbd5e1"}; background:${task.severity === sev ? SEV_BG[sev] : "#fff"}; color:${task.severity === sev ? SEV_COLOR[sev] : "#475569"}; cursor:pointer; transition:all 0.15s;">
+                  ${sev}
+                </button>
+              `).join("")}
+            </div>
+          </div>
+
+          <!-- Toggle Active / Working Status -->
+          <div style="display:flex; gap:8px; margin-top:4px;">
+            <button id="modalToggleWorkingBtn" class="secondary" style="flex:1; padding:10px 14px; font-size:12px; font-weight:700; border-radius:8px; cursor:pointer; background:#fff; border:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; gap:6px;">
+              <span>${isWorking ? "⏸ Stop Active Session" : "▶ Mark as Active"}</span>
+            </button>
+            <button id="modalToggleDoneBtn" class="secondary" style="flex:1; padding:10px 14px; font-size:12px; font-weight:700; border-radius:8px; cursor:pointer; background:#fff; border:1px solid #cbd5e1; display:flex; align-items:center; justify-content:center; gap:6px;">
+              <span>${isDone ? "↩ Reopen Task" : "✓ Mark as Done"}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- AI reasoning breakdown -->
+        <div style="background:#f0fdf4; border-radius:12px; padding:12px; border:1px solid #bbf7d0;">
+          <strong style="display:block; font-size:10px; color:#15803d; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px;">✦ AI Priority Reason</strong>
+          <p style="font-size:11.5px; color:#166534; margin:0; line-height:1.45;">
+            ${task.priorityExplanation || (task.rankReasons ? task.rankReasons[0] : "Priority evaluated dynamically based on enterprise impact.")}
+          </p>
+        </div>
+
+      </div>
     </div>
   `;
 }
@@ -1879,12 +2632,25 @@ function renderCalendarAI() {
   return `
     <style>
       .cal-task-card {
-        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        padding: 10px;
+        border-radius: 10px;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+        cursor: pointer;
+        transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        position: relative;
       }
       .cal-task-card:hover {
-        transform: translateY(-2px) scale(1.01);
-        box-shadow: 0 6px 14px rgba(0,0,0,0.08) !important;
-        filter: brightness(0.98);
+        transform: translateY(-2px) scale(1.02);
+        box-shadow: 0 8px 16px rgba(0,0,0,0.06) !important;
+        border-color: #cbd5e1;
+      }
+      .cal-task-card.selected-card {
+        background: #ffffff;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.08) !important;
+        transform: translateY(-2px);
+        z-index: 5;
       }
       .cal-sev-btn {
         transition: all 0.15s ease;
@@ -1893,47 +2659,87 @@ function renderCalendarAI() {
         transform: translateY(-1px);
         box-shadow: 0 2px 6px rgba(0,0,0,0.05);
       }
+      .cal-legend-chip {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        font-size: 12px;
+        font-weight: 700;
+        border: 1.5px solid transparent;
+      }
+      .cal-legend-chip:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.04);
+      }
+      .cal-day-column {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        overflow: hidden;
+        min-height: 380px;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.015);
+        display: flex;
+        flex-direction: column;
+        transition: all 0.25s ease;
+      }
+      .cal-day-column:hover {
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.03);
+        border-color: #cbd5e1;
+      }
+      .cal-day-column.today {
+        background: #fefdf6;
+        border: 2px solid #fbbf24;
+        box-shadow: 0 8px 24px rgba(251, 191, 36, 0.08);
+      }
     </style>
 
     <div style="padding:24px; max-width:1400px; margin:0 auto; font-family: 'Outfit', sans-serif;">
       
       <!-- Top banner / header -->
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; background:linear-gradient(135deg, #1e293b, #0f172a); padding:20px 24px; border-radius:16px; color:#fff; box-shadow:0 10px 25px -5px rgba(0,0,0,0.1);">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; background:linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding:24px; border-radius:18px; color:#fff; box-shadow:0 12px 30px -5px rgba(15,23,42,0.15); border:1px solid rgba(255,255,255,0.05);">
         <div style="flex:1;">
-          <span style="font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.15em; color:#38bdf8; background:#38bdf81a; padding:4px 10px; border-radius:999px;">🤖 AI-Optimized Resource Planning</span>
-          <h1 style="margin:8px 0 2px; font-size:28px; color:#fff; font-weight:800; font-family:'Outfit', sans-serif;">📆 CalendarAI</h1>
-          <p style="font-size:13px; color:#94a3b8; margin:0;">
+          <span style="font-size:10px; font-weight:850; text-transform:uppercase; letter-spacing:0.15em; color:#38bdf8; background:#38bdf81e; padding:5px 12px; border-radius:999px;">🤖 AI-Optimized Resource Planning</span>
+          <h1 style="margin:10px 0 4px; font-size:30px; color:#fff; font-weight:800; font-family:'Outfit', sans-serif; letter-spacing:-0.02em;">📆 CalendarAI</h1>
+          <p style="font-size:13.5px; color:#94a3b8; margin:0;">
             Auto-allocates tasks across ${engineers.length} engineers based on deadlines, severity, workload, and historical velocity.
           </p>
           <!-- Capacity metrics -->
-          <div style="display:flex; gap:16px; margin-top:12px;">
-            <div style="display:flex; align-items:center; gap:6px;">
-              <span style="font-size:11px; color:#64748b;">Scheduled:</span>
-              <span style="font-size:14px; font-weight:800; color:#22c55e;">${totalAllocated}</span>
+          <div style="display:flex; gap:16px; margin-top:14px; align-items:center;">
+            <div style="display:flex; align-items:center; gap:6px; background:rgba(255,255,255,0.06); padding:4px 10px; border-radius:8px;">
+              <span style="font-size:11px; color:#94a3b8;">Scheduled:</span>
+              <span style="font-size:13px; font-weight:800; color:#22c55e;">${totalAllocated}</span>
               <span style="font-size:11px; color:#64748b;">/ ${totalTasks} tasks</span>
             </div>
             ${overflowCount > 0 ? `
-              <div style="display:flex; align-items:center; gap:6px;">
-                <span style="font-size:11px; color:#64748b;">Overflow:</span>
-                <span style="font-size:14px; font-weight:800; color:#f97316;">${overflowCount}</span>
+              <div style="display:flex; align-items:center; gap:6px; background:rgba(249,115,22,0.1); padding:4px 10px; border-radius:8px; border:1px solid rgba(249,115,22,0.2);">
+                <span style="font-size:11px; color:#fdba74;">Overflow:</span>
+                <span style="font-size:13px; font-weight:800; color:#f97316;">${overflowCount}</span>
               </div>
             ` : ""}
-            <div style="display:flex; align-items:center; gap:6px;">
-              <span style="font-size:11px; color:#64748b;">Capacity:</span>
-              <span style="font-size:14px; font-weight:800; color:${capacityUtilization >= 90 ? "#22c55e" : capacityUtilization >= 70 ? "#fbbf24" : "#f87171"};">${capacityUtilization}%</span>
+            <div style="display:flex; align-items:center; gap:6px; background:rgba(255,255,255,0.06); padding:4px 10px; border-radius:8px;">
+              <span style="font-size:11px; color:#94a3b8;">Capacity:</span>
+              <span style="font-size:13px; font-weight:800; color:${capacityUtilization >= 90 ? "#22c55e" : capacityUtilization >= 70 ? "#fbbf24" : "#f87171"};">${capacityUtilization}%</span>
             </div>
           </div>
         </div>
         <div style="display:flex; gap:12px; align-items:center;">
-          <div style="display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.15); padding:6px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.25);">
+          <div style="display:flex; align-items:center; gap:8px; background:rgba(255,255,255,0.08); padding:8px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.15);">
             <label for="calendarEngineerFilter" style="font-size:12px; font-weight:800; color:#fff; white-space:nowrap;">👤 Filter:</label>
-            <select id="calendarEngineerFilter" style="background:transparent; color:#fff; border:none; font-size:12px; font-weight:700; outline:none; cursor:pointer;">
+            <select id="calendarEngineerFilter" style="background:transparent; color:#fff; border:none; font-size:12.5px; font-weight:700; outline:none; cursor:pointer;">
               <option value="" style="color:#000;" ${!calendarSelectedEngineer ? "selected" : ""}>Show All Engineers</option>
-              ${engineers.map(eng => `<option value="${eng}" style="color:#000;" ${calendarSelectedEngineer === eng ? "selected" : ""}>${eng}</option>`).join("")}
+              ${engineers.map(eng => {
+                const summary = getEngineerStatusSummary(eng);
+                const statusStr = summary.canBeAssigned ? "🟢 Avail" : "🔴 Full";
+                return `<option value="${eng}" style="color:#000;" ${calendarSelectedEngineer === eng ? "selected" : ""}>${eng} (${summary.tasksCount} tasks, ${statusStr})</option>`;
+              }).join("")}
             </select>
           </div>
-          <button class="primary" id="optimizeScheduleBtn" style="background:#38bdf8; color:#0f172a; font-size:12px; font-weight:800; display:flex; align-items:center; gap:8px; padding:10px 20px; border-radius:10px; border:none; box-shadow:0 4px 14px rgba(56, 189, 248, 0.4); cursor:pointer; transition:all 0.2s;">
-            <span>✦</span> Re-balance Team Workload
+          <button class="primary" id="optimizeScheduleBtn" style="background:linear-gradient(135deg, #38bdf8 0%, #0284c7 100%); color:#fff; font-size:12px; font-weight:800; display:flex; align-items:center; gap:8px; padding:12px 22px; border-radius:10px; border:none; box-shadow:0 4px 16px rgba(56, 189, 248, 0.35); cursor:pointer; transition:all 0.2s;">
+            <span>🤖</span> Auto-Assign Tasks
           </button>
         </div>
       </div>
@@ -1944,31 +2750,84 @@ function renderCalendarAI() {
         <div style="display:grid; gap:20px;">
           
           <!-- Legend -->
-          <div style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px; box-shadow:0 4px 10px rgba(0,0,0,0.02);">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-              <p style="font-size:11px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:0.05em; margin:0;">Filter by Engineer</p>
-              ${calendarSelectedEngineer ? `<button id="clearCalFilterBtn" style="font-size:11px; font-weight:700; color:#0c66e4; background:none; border:none; cursor:pointer; padding:0; text-decoration:underline;">Show All (Clear Filter)</button>` : ""}
+          <div style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:18px; box-shadow:0 4px 12px rgba(0,0,0,0.015);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <p style="font-size:11px; font-weight:800; color:#475569; text-transform:uppercase; letter-spacing:0.06em; margin:0;">Filter by Engineer</p>
+              ${calendarSelectedEngineer ? `<button id="clearCalFilterBtn" style="font-size:11px; font-weight:700; color:#0052CC; background:none; border:none; cursor:pointer; padding:0; text-decoration:underline;">Show All (Clear Filter)</button>` : ""}
             </div>
             <div style="display:flex; flex-wrap:wrap; gap:8px;">
               ${schedules.map(s => {
                 const isSelected = calendarSelectedEngineer === s.engineer;
                 const bg = isSelected ? `${s.color}15` : `${s.color}05`;
-                const border = isSelected ? `2px solid ${s.color}` : `1px solid ${s.color}18`;
+                const border = isSelected ? `2px solid ${s.color}` : `1.5px solid ${s.color}1e`;
                 const fontW = isSelected ? "800" : "700";
+                const summary = getEngineerStatusSummary(s.engineer);
+                const capacityBadge = summary.canBeAssigned 
+                  ? `<span style="font-size:9.5px; color:#0f766e; background:#ccfbf1; padding:1px 6px; border-radius:999px; margin-left:4px; font-weight:800;">🟢 Available</span>`
+                  : `<span style="font-size:9.5px; color:#b91c1c; background:#fee2e2; padding:1px 6px; border-radius:999px; margin-left:4px; font-weight:800;">🔴 At Capacity</span>`;
+                
                 return `
-                  <div class="cal-legend-item" data-engineer="${s.engineer}" style="display:flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; background:${bg}; border:${border}; cursor:pointer; transition:all 0.15s ease;">
+                  <div class="cal-legend-chip" data-engineer="${s.engineer}" style="background:${bg}; border:${border};">
                     <span style="width:8px; height:8px; border-radius:50%; background:${s.color}; flex-shrink:0;"></span>
-                    <span style="font-size:12px; font-weight:${fontW}; color:#1e293b;">${s.engineer}</span>
-                    <span style="font-size:11px; color:#64748b; background:${s.color}15; padding:1px 6px; border-radius:999px; margin-left:4px;">${s.slots.length}</span>
+                    <span style="font-weight:${fontW}; color:#1e293b;">${s.engineer}</span>
+                    <span style="font-size:10px; color:#64748b; background:${s.color}1e; padding:1px 6px; border-radius:999px; margin-left:4px;">${summary.tasksCount} tasks (${summary.projectCount} proj)</span>
+                    ${capacityBadge}
                   </div>`;
               }).join("")}
             </div>
           </div>
 
+          <!-- Capacity Profile Card when filter is active -->
+          ${(() => {
+            if (!calendarSelectedEngineer) return "";
+            const summary = getEngineerStatusSummary(calendarSelectedEngineer);
+            const engColor = ENG_COLORS[engineers.indexOf(calendarSelectedEngineer) % ENG_COLORS.length] || "#2563eb";
+            return `
+              <div style="background:#fff; border:1px solid #cbd5e1; border-left:6px solid ${engColor}; border-radius:16px; padding:16px 20px; box-shadow:0 4px 12px rgba(0,0,0,0.02); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+                <div style="display:flex; align-items:center; gap:12px;">
+                  <div style="width:36px; height:36px; border-radius:50%; background:${engColor}15; color:${engColor}; display:grid; place-items:center; font-size:18px; font-weight:800;">
+                    ${calendarSelectedEngineer[0]}
+                  </div>
+                  <div>
+                    <h3 style="margin:0; font-size:16px; font-weight:800; color:#0f172a;">${calendarSelectedEngineer}'s Capacity Profile</h3>
+                    <p style="margin:2px 0 0; font-size:12px; color:#64748b;">
+                      Assigned to <strong>${summary.tasksCount} tasks</strong> across <strong>${summary.projectCount} projects</strong> (${summary.projectsList.join(", ") || "None"})
+                    </p>
+                  </div>
+                </div>
+                
+                <div style="display:flex; align-items:center; gap:16px;">
+                  <!-- Capacity Meter -->
+                  <div style="text-align:right;">
+                    <div style="font-size:11px; color:#64748b; font-weight:700;">Weekly Load Metric</div>
+                    <div style="display:flex; align-items:center; gap:8px; margin-top:2px;">
+                      <div style="width:100px; height:8px; background:#f1f5f9; border-radius:999px; overflow:hidden;">
+                        <div style="width:${Math.min(100, summary.loadPercentage)}%; height:100%; background:${summary.canBeAssigned ? "#0d9488" : "#ef4444"}; border-radius:inherit;"></div>
+                      </div>
+                      <span style="font-size:12px; font-weight:800; color:${summary.canBeAssigned ? "#0d9488" : "#ef4444"};">${summary.loadPercentage}%</span>
+                    </div>
+                  </div>
+
+                  <!-- Assignment Readiness Badge -->
+                  <div style="background:${summary.canBeAssigned ? "#ecfdf5" : "#fef2f2"}; border:1px solid ${summary.canBeAssigned ? "#10b98133" : "#ef444433"}; padding:8px 12px; border-radius:10px; text-align:center;">
+                    <div style="font-size:10px; font-weight:800; color:${summary.canBeAssigned ? "#047857" : "#b91c1c"}; text-transform:uppercase; letter-spacing:0.04em;">Ready for Tasks?</div>
+                    <div style="font-size:12.5px; font-weight:800; color:${summary.canBeAssigned ? "#065f46" : "#991b1b"}; margin-top:2px;">
+                      ${summary.canBeAssigned ? "🟢 Yes (Available)" : "🔴 No (At Capacity)"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `;
+          })()}
+
           <!-- Weekly grid -->
           <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:10px;">
             ${days.map(day => {
-              const label = new Date(day + "T12:00:00").toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
+              const labelDate = new Date(day + "T12:00:00");
+              const weekday = labelDate.toLocaleDateString("en-US", { weekday: "short" });
+              const dateStr = labelDate.getDate();
+              const monthStr = labelDate.toLocaleDateString("en-US", { month: "short" });
+              
               const isToday = day === TODAY;
               const allSlots = schedules
                 .filter(s => !calendarSelectedEngineer || s.engineer === calendarSelectedEngineer)
@@ -1978,38 +2837,40 @@ function renderCalendarAI() {
               const loadColor = loadPct >= 90 ? "#ef4444" : loadPct >= 65 ? "#f97316" : "#0d9488";
 
               return `
-                <div style="background:${isToday ? "#fffdf5" : "#fff"}; border:${isToday ? "2px solid #fbbf24" : "1px solid #e2e8f0"}; border-radius:16px; overflow:hidden; min-height:260px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.01),0 2px 4px -1px rgba(0,0,0,0.01); display:flex; flex-direction:column;">
+                <div class="cal-day-column ${isToday ? "today" : ""}">
                   <!-- Day header -->
-                  <div style="padding:12px 14px 10px; background:${isToday ? "#fef3c7" : "#f8fafc"}; border-bottom:1px solid #e2e8f0;">
-                    <div style="font-size:11px; font-weight:800; color:${isToday ? "#b45309" : "#64748b"}; text-transform:uppercase; letter-spacing:0.06em;">${label}</div>
-                    ${isToday ? `<div style="font-size:9px; color:#b45309; font-weight:800; margin-top:2px;">TODAY</div>` : ""}
+                  <div style="padding:14px; background:${isToday ? "#fef3c733" : "#f8fafc"}; border-bottom:1px solid #e2e8f0;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                      <span style="font-size:12px; font-weight:800; color:${isToday ? "#b45309" : "#1e293b"}; text-transform:uppercase; letter-spacing:0.04em;">${weekday}</span>
+                      <span style="font-size:11px; font-weight:800; color:${isToday ? "#fff" : "#475569"}; background:${isToday ? "#b45309" : "#e2e8f0"}; padding:2px 7px; border-radius:999px;">${monthStr} ${dateStr}</span>
+                    </div>
                     <!-- Load bar -->
-                    <div style="margin-top:8px; height:5px; background:#e2e8f0; border-radius:999px; overflow:hidden;">
+                    <div style="height:6px; background:#e2e8f0; border-radius:999px; overflow:hidden;">
                       <div style="width:${loadPct}%; height:100%; background:${loadColor}; border-radius:inherit; transition:width 0.4s;"></div>
                     </div>
-                    <div style="font-size:9px; color:${loadColor}; font-weight:800; margin-top:4px; display:flex; justify-content:space-between;">
+                    <div style="font-size:9.5px; color:${loadColor}; font-weight:800; margin-top:5px; display:flex; justify-content:space-between;">
                       <span>${loadPct}% load</span>
                       <span>${Math.round(totalMin/60*10)/10}h</span>
                     </div>
                   </div>
                   <!-- Task slots -->
-                  <div style="padding:8px; display:grid; gap:6px; flex:1; align-content:start;">
+                  <div style="padding:8px; display:grid; gap:8px; flex:1; align-content:start; overflow-y:auto; max-height:480px;">
                     ${allSlots.length === 0
-                      ? `<div style="text-align:center; padding:32px 0; color:#94a3b8; font-size:11px; font-style:italic;">Free</div>`
+                      ? `<div style="text-align:center; padding:40px 0; color:#94a3b8; font-size:11px; font-style:italic;">No tasks</div>`
                       : allSlots.map(sl => {
                           const isSelected = selectedTaskId === sl.task.id;
-                          const cardStyle = isSelected
-                            ? `padding:8px 10px; border-radius:9px; background:#fff; border: 2px solid ${sl.color}; box-shadow: 0 8px 20px ${sl.color}25, 0 1px 3px rgba(0,0,0,0.05); transform: translateY(-2px); outline: none; z-index: 2; position: relative; cursor:pointer;`
-                            : `padding:8px; border-radius:8px; background:${sl.color}08; border-left:3px solid ${sl.color}; border-top:1px solid #f1f5f9; border-right:1px solid #f1f5f9; border-bottom:1px solid #f1f5f9; cursor:pointer;`;
+                          const borderLeft = `border-left: 4px solid ${sl.color}`;
+                          const borderSelected = isSelected ? `border: 2px solid ${sl.color}` : `border: 1px solid #e2e8f0; ${borderLeft}`;
+                          const cardBg = isSelected ? "#fff" : "#fff";
                           
                           return `
-                            <div class="cal-task-card" style="${cardStyle}" data-task="${sl.task.id}">
+                            <div class="cal-task-card ${isSelected ? "selected-card" : ""}" style="background:${cardBg}; ${borderSelected};" data-task="${sl.task.id}">
                               <div style="display:flex; align-items:center; gap:4px; margin-bottom:4px;">
                                 <span style="font-size:8px; font-weight:900; padding:1px 4px; border-radius:3px; background:${SEV_BG[sl.task.severity]}; color:${SEV_COLOR[sl.task.severity]};">${sl.task.severity}</span>
                                 <span style="font-size:9px; color:${sl.color}; font-weight:800; max-width:65px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sl.engineer}</span>
                                 <span style="font-size:9px; color:#94a3b8; margin-left:auto;">~${sl.estMin >= 60 ? Math.round(sl.estMin/60*10)/10+"h" : sl.estMin+"m"}</span>
                               </div>
-                              <div style="font-size:11px; font-weight:600; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(sl.task.canonicalTitle)}</div>
+                              <div style="font-size:11.5px; font-weight:700; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.35;">${escapeHtml(sl.task.canonicalTitle)}</div>
                             </div>`;
                         }).join("")}
                   </div>
@@ -2017,52 +2878,7 @@ function renderCalendarAI() {
             }).join("")}
           </div>
 
-          <!-- Per-Engineer Details -->
-          <div style="background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:20px; box-shadow:0 4px 10px rgba(0,0,0,0.02); display:grid; gap:16px;">
-            <h3 style="margin:0; font-size:16px; color:#0f172a; font-weight:800;">Per-Engineer Schedules</h3>
-            <div style="display:grid; gap:12px;">
-              ${schedules.map(s => {
-                const avgMin = avgTimes[s.engineer]
-                  ? Math.round(avgTimes[s.engineer].total / avgTimes[s.engineer].count)
-                  : null;
-                return `
-                  <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid ${s.color}; border-radius:12px; padding:14px 16px;">
-                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
-                      <div style="display:flex; align-items:center; gap:10px;">
-                        <div style="width:34px; height:34px; border-radius:50%; background:${s.color}; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:14px; box-shadow:0 2px 6px ${s.color}25;">
-                          ${s.engineer[0]}
-                        </div>
-                        <div>
-                          <div style="font-size:13px; font-weight:800; color:#1e293b;">${s.engineer}</div>
-                          <div style="font-size:11px; color:#64748b;">
-                            ${s.slots.length} tasks allocated ${avgMin ? ` · avg ${avgMin >= 60 ? Math.round(avgMin/60*10)/10+"h" : avgMin+"m"} per task` : ""}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:8px;">
-                      ${s.slots.map(sl => {
-                        const isSelected = selectedTaskId === sl.task.id;
-                        const itemStyle = isSelected
-                          ? `display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:8px; background:#fff; border: 2px solid ${s.color}; box-shadow:0 4px 12px ${s.color}15; cursor:pointer;`
-                          : `display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:8px; background:#fff; border:1px solid #e2e8f0; cursor:pointer;`;
-                        
-                        return `
-                          <div class="cal-task-card" style="${itemStyle}" data-task="${sl.task.id}">
-                            <span style="font-size:9px; font-weight:900; padding:2px 5px; border-radius:4px; background:${SEV_BG[sl.task.severity]}; color:${SEV_COLOR[sl.task.severity]}; flex-shrink:0;">${sl.task.severity}</span>
-                            <div style="min-width:0; flex:1;">
-                              <div style="font-size:12px; font-weight:700; color:#1e293b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(sl.task.canonicalTitle)}</div>
-                              <div style="font-size:10px; color:#94a3b8; margin-top:2px;">${sl.day} · ~${sl.estMin >= 60 ? Math.round(sl.estMin/60*10)/10+"h" : sl.estMin+"m"}</div>
-                            </div>
-                          </div>`;
-                      }).join("")}
-                    </div>
-                  </div>`;
-              }).join("")}
-            </div>
-          </div>
-
-          <!-- Overflow Tasks (couldn't fit in schedule) -->
+          <!-- Capacity Overflow Tasks -->
           ${(() => {
             const scheduledIds = schedules.flatMap(s => s.slots.map(sl => sl.task.id));
             const overflowTasks = activeTasks.filter(t => !scheduledIds.includes(t.id));
@@ -2070,9 +2886,9 @@ function renderCalendarAI() {
             if (overflowTasks.length === 0) return "";
             
             return `
-              <div style="background:#fff4ed; border:1px solid #ffd5c2; border-left:4px solid #f97316; border-radius:16px; padding:20px; box-shadow:0 4px 10px rgba(249, 115, 22, 0.08);">
+              <div style="background:#fffaf8; border:1px solid #fed7aa; border-left:4px solid #f97316; border-radius:16px; padding:20px; box-shadow:0 4px 14px rgba(249, 115, 22, 0.05);">
                 <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
-                  <span style="font-size:20px;">⚠️</span>
+                  <span style="font-size:22px;">⚠️</span>
                   <div>
                     <h3 style="margin:0; font-size:15px; color:#c2410c; font-weight:800;">Capacity Overflow</h3>
                     <p style="margin:2px 0 0; font-size:12px; color:#9a3412;">
@@ -2080,26 +2896,27 @@ function renderCalendarAI() {
                     </p>
                   </div>
                 </div>
-                <div style="display:grid; gap:8px; max-height:300px; overflow-y:auto;">
+                <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:10px; max-height:220px; overflow-y:auto; padding:2px;">
                   ${overflowTasks.map(t => {
                     const owner = t.owner || "Unassigned";
                     const engColor = ENG_COLORS[engineers.indexOf(owner) % ENG_COLORS.length] || "#64748b";
                     return `
-                      <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:#fff; border:1px solid #fed7aa; border-radius:8px; cursor:pointer;" data-task="${t.id}">
-                        <span style="font-size:10px; font-weight:900; padding:2px 6px; border-radius:4px; background:${SEV_BG[t.severity]}; color:${SEV_COLOR[t.severity]}; flex-shrink:0;">${t.severity}</span>
+                      <div class="cal-task-card" style="border-left: 4px solid ${engColor}; display:flex; align-items:center; gap:10px;" data-task="${t.id}">
+                        <span style="font-size:9px; font-weight:900; padding:2px 5px; border-radius:4px; background:${SEV_BG[t.severity]}; color:${SEV_COLOR[t.severity]}; flex-shrink:0;">${t.severity}</span>
                         <div style="flex:1; min-width:0;">
                           <div style="font-size:12px; font-weight:700; color:#1e293b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(t.canonicalTitle)}</div>
-                          <div style="font-size:10px; color:#78716c; margin-top:2px;">
-                            <span style="color:${engColor}; font-weight:600;">${owner}</span>
+                          <div style="font-size:10px; color:#64748b; margin-top:2px;">
+                            <span style="color:${engColor}; font-weight:700;">${owner}</span>
                             ${t.due ? ` · Due ${formatDue(t.due)}` : ""}
                           </div>
                         </div>
-                        <span style="font-size:10px; padding:3px 8px; border-radius:999px; background:#fef3c7; color:#92400e; font-weight:700; flex-shrink:0;">Overflow</span>
+                        <span style="font-size:9.5px; padding:3px 8px; border-radius:999px; background:#ffebeb; color:#ef4444; font-weight:800; flex-shrink:0;">Overflow</span>
                       </div>`;
                   }).join("")}
                 </div>
-                <div style="margin-top:14px; padding:12px; background:#fffbeb; border:1px dashed #fcd34d; border-radius:8px; font-size:11px; color:#78350f; line-height:1.5;">
-                  <strong>💡 Recommendation:</strong> Consider redistributing these tasks, extending the sprint, or bringing in additional resources to meet deadlines.
+                <div style="margin-top:14px; padding:12px 14px; background:#fffdf5; border:1px dashed #fcd34d; border-radius:10px; font-size:11.5px; color:#78350f; line-height:1.55; display:flex; align-items:flex-start; gap:8px;">
+                  <span>💡</span>
+                  <span><strong>Recommendation:</strong> Consider redistributing these tasks, extending the sprint, or bringing in additional resources to meet deadlines.</span>
                 </div>
               </div>
             `;
@@ -2116,6 +2933,7 @@ function renderCalendarAI() {
 
     </div>
   `;
+
 }
 
 // ─── Project Genome & Mutation Predictor ─────────────────────────────────────
@@ -2528,7 +3346,7 @@ function renderManagerCommandStrip(selected) {
   const topRisk = genomeState.risks?.[0];
   const similarityScore = genomeState.similarityScore;
   return `
-    <section class="manager-command-strip hero-grid">
+    <section class="manager-command-strip hero-grid" style="grid-template-columns: 1.45fr repeat(2, minmax(190px, 0.75fr));">
       <article class="hero-card alert" style="cursor: pointer;" data-nav="overview">
         <p class="eyebrow">Team risk pulse</p>
         <h2>${slaRisks.length} SLA / escalation risks</h2>
@@ -2541,11 +3359,6 @@ function renderManagerCommandStrip(selected) {
           ? `Current sprint is ${similarityScore}% similar to a past sprint. ${topRisk ? `Top risk: ${topRisk.label} (${topRisk.pct}%).` : ""}`
           : "Run the Genome Analyzer to predict risks from historical sprint patterns."
         }</p>
-      </article>
-      <article class="hero-card" style="cursor: pointer;" data-nav="hidden">
-        <p class="eyebrow">Hidden asks</p>
-        <h2>${insights.unstructuredCount} unstructured signals</h2>
-        <p>Emails, Slack mentions, and meeting notes normalized into structured task records before priority scoring.</p>
       </article>
       <article class="hero-card priority" style="cursor: pointer;" data-nav="analytics">
         <p class="eyebrow">Manager action</p>
@@ -2741,71 +3554,135 @@ function renderManagerDashboard_inner(selected, insights, p1Tasks, blockers, sla
         </div>
       </div>
 
-      <!-- Meetings & Sources Intelligence -->
-      <div class="mgr-intel-row" style="display:grid; grid-template-columns: 1.2fr 0.8fr; gap:14px; margin-bottom:14px;">
+      <!-- Meetings & Connected Sources & Engineer Presence Intelligence -->
+      <div class="mgr-intel-row" style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:14px; margin-bottom:14px;">
         <!-- Meetings Card -->
-        <div class="mgr-panel" style="border-left: 4px solid #22a06b;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <h3 style="margin:0;">📅 Meetings Intelligence</h3>
-            <button class="secondary" style="font-size:11px; padding:4px 10px;" data-nav="meetings">Go to Meetings →</button>
-          </div>
-          <div style="display:grid; gap:8px; max-height:220px; overflow-y:auto;">
-            ${meetingsList.slice(0, 3).map(m => `
-              <div style="padding:10px; border:1px solid #dfe3ea; border-radius:6px; background:#fafbfc; display:flex; justify-content:space-between; align-items:start;">
-                <div>
-                  <strong style="color:#172b4d; font-size:13px;">${escapeHtml(m.title)}</strong>
-                  <div style="font-size:11px; color:#626f86; margin-top:2px;">
-                    🕒 ${m.suggestedDate} ${m.suggestedTime || ""} · 👤 ${m.attendees?.join(", ") || "No attendees"}
+        <div class="mgr-panel" style="border-left: 4px solid #22a06b; display:flex; flex-direction:column; justify-content:space-between;">
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h3 style="margin:0;">📅 Meetings Intelligence</h3>
+              <button class="secondary" style="font-size:11px; padding:4px 10px;" data-nav="meetings">Go to Meetings →</button>
+            </div>
+            <div style="display:grid; gap:8px; max-height:220px; overflow-y:auto;">
+              ${meetingsList.slice(0, 3).map(m => `
+                <div style="padding:10px; border:1px solid #dfe3ea; border-radius:6px; background:#fafbfc; display:flex; justify-content:space-between; align-items:start;">
+                  <div>
+                    <strong style="color:#172b4d; font-size:13px;">${escapeHtml(m.title)}</strong>
+                    <div style="font-size:11px; color:#626f86; margin-top:2px;">
+                      🕒 ${m.suggestedDate} ${m.suggestedTime || ""} · 👤 ${m.attendees?.join(", ") || "No attendees"}
+                    </div>
+                    ${m.agenda ? `<div style="font-size:11px; color:#44546f; margin-top:4px; font-style:italic;">"${escapeHtml(m.agenda)}"</div>` : ""}
                   </div>
-                  ${m.agenda ? `<div style="font-size:11px; color:#44546f; margin-top:4px; font-style:italic;">"${escapeHtml(m.agenda)}"</div>` : ""}
+                  <span style="font-size:11px; padding:2px 7px; border-radius:10px; background:${m.priority === 'Critical' ? '#ffd5d2' : m.priority === 'High' ? '#fff0b3' : '#dcfff1'}; color:${m.priority === 'Critical' ? '#ae2a19' : m.priority === 'High' ? '#974f0c' : '#216e4e'}; font-weight:800;">
+                    ${m.priority}
+                  </span>
                 </div>
-                <span style="font-size:11px; padding:2px 7px; border-radius:10px; background:${m.priority === 'Critical' ? '#ffd5d2' : m.priority === 'High' ? '#fff0b3' : '#dcfff1'}; color:${m.priority === 'Critical' ? '#ae2a19' : m.priority === 'High' ? '#974f0c' : '#216e4e'}; font-weight:800;">
-                  ${m.priority}
-                </span>
-              </div>
-            `).join("")}
-            ${meetingsList.length === 0 ? `<p style="color:#626f86; font-size:12px; font-style:italic;">No meetings detected.</p>` : ""}
+              `).join("")}
+              ${meetingsList.length === 0 ? `<p style="color:#626f86; font-size:12px; font-style:italic;">No meetings detected.</p>` : ""}
+            </div>
           </div>
         </div>
 
-        <!-- Sources Card -->
-        <div class="mgr-panel" style="border-left: 4px solid #0c66e4;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <h3 style="margin:0;">🔌 Connected Sources</h3>
-            <button class="secondary" style="font-size:11px; padding:4px 10px;" data-nav="inbox">All Sources →</button>
-          </div>
-          <div style="display:grid; gap:8px;">
-            ${[
-              { id: "mgr-jira",       name: "Jira Sprint Board",    srcId: "Jira",           color: "#0052CC", icon: "▦" },
-              { id: "mgr-github",     name: "GitHub PR Reviews",    srcId: "GitHub",         color: "#1a1a2e", icon: "⌁" },
-              { id: "mgr-servicenow", name: "ServiceNow Defects",   srcId: "ServiceNow",     color: "#c0392b", icon: "△" },
-              { id: "mgr-email",      name: "Outlook Inbox",        srcId: "Outlook",        color: "#0078D4", icon: "📧" },
-              { id: "mgr-slack",      name: "Slack Mentions",       srcId: "Slack",          color: "#4A154B", icon: "💬" },
-              { id: "meetings",       name: "Meetings",             srcId: "meetings",       color: "#1a7a4a", icon: "◷" }
-            ].map(src => {
-              const srcKey = { "mgr-jira":"jira","mgr-github":"github","mgr-servicenow":"servicenow","mgr-email":"email","mgr-slack":"slack","meetings":"notes" }[src.id] || "notes";
-              const srcLogo = SOURCE_LOGO_MAP[srcKey];
-              const isMeetings = src.id === "meetings";
-              const count = isMeetings
-                ? meetingsList.length
-                : state.prioritized.filter(t => t.sources.some(s => s.toLowerCase().includes(src.srcId.toLowerCase())) && !completedTaskIds.includes(t.id)).length;
-              const p1Count = isMeetings
-                ? meetingsList.filter(m => m.priority === "Critical" || m.priority === "High").length
-                : state.prioritized.filter(t => t.sources.some(s => s.toLowerCase().includes(src.srcId.toLowerCase())) && t.severity === "P1" && !completedTaskIds.includes(t.id)).length;
-              return `
-                <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border:1px solid #dfe3ea; border-radius:6px; background:#fff; cursor:pointer;" data-nav="${src.id}">
-                  <div style="display:flex; align-items:center; gap:8px;">
-                    <span style="display:flex;width:24px;height:24px;align-items:center;justify-content:center;border-radius:5px;background:${srcLogo ? srcLogo.bg : src.color+'22'};">${srcLogo ? srcLogo.svg : src.icon}</span>
-                    <strong style="color:#172b4d; font-size:12px;">${src.name}</strong>
+        <!-- Connected Sources Card -->
+        <div class="mgr-panel" style="border-left: 4px solid #0c66e4; display:flex; flex-direction:column; justify-content:space-between;">
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h3 style="margin:0;">🔌 Connected Sources</h3>
+              <button class="secondary" style="font-size:11px; padding:4px 10px;" data-nav="inbox">All Sources →</button>
+            </div>
+            <div style="display:grid; gap:8px;">
+              ${[
+                { id: "mgr-jira",       name: "Jira Sprint Board",    srcId: "Jira",           color: "#0052CC", icon: "▦" },
+                { id: "mgr-github",     name: "GitHub PR Reviews",    srcId: "GitHub",         color: "#1a1a2e", icon: "⌁" },
+                { id: "mgr-servicenow", name: "ServiceNow Defects",   srcId: "ServiceNow",     color: "#c0392b", icon: "△" },
+                { id: "mgr-email",      name: "Outlook Inbox",        srcId: "Outlook",        color: "#0078D4", icon: "📧" },
+                { id: "mgr-slack",      name: "Slack Mentions",       srcId: "Slack",          color: "#4A154B", icon: "💬" },
+                { id: "meetings",       name: "Meetings",             srcId: "meetings",       color: "#1a7a4a", icon: "◷" }
+              ].slice(0, 5).map(src => {
+                const srcKey = { "mgr-jira":"jira","mgr-github":"github","mgr-servicenow":"servicenow","mgr-email":"email","mgr-slack":"slack","meetings":"notes" }[src.id] || "notes";
+                const srcLogo = SOURCE_LOGO_MAP[srcKey];
+                const isMeetings = src.id === "meetings";
+                const count = isMeetings
+                  ? meetingsList.length
+                  : state.prioritized.filter(t => t.sources.some(s => s.toLowerCase().includes(src.srcId.toLowerCase())) && !completedTaskIds.includes(t.id)).length;
+                const p1Count = isMeetings
+                  ? meetingsList.filter(m => m.priority === "Critical" || m.priority === "High").length
+                  : state.prioritized.filter(t => t.sources.some(s => s.toLowerCase().includes(src.srcId.toLowerCase())) && t.severity === "P1" && !completedTaskIds.includes(t.id)).length;
+                return `
+                  <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border:1px solid #dfe3ea; border-radius:6px; background:#fff; cursor:pointer;" data-nav="${src.id}">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                      <span style="display:flex;width:20px;height:20px;align-items:center;justify-content:center;border-radius:4px;background:${srcLogo ? srcLogo.bg : src.color+'22'};">${srcLogo ? srcLogo.svg : src.icon}</span>
+                      <strong style="color:#172b4d; font-size:11px;">${src.name}</strong>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                      <span style="font-size:10px; padding:1px 5px; border-radius:8px; background:#f1f2f4; color:#44546f; font-weight:700;">${count}</span>
+                      ${p1Count > 0 ? `<span style="font-size:9.5px; padding:1px 4.5px; border-radius:3px; background:${isMeetings ? "#ede9fe" : "#ffd5d2"}; color:${isMeetings ? "#5b21b6" : "#ae2a19"}; font-weight:800;">${p1Count}</span>` : ""}
+                    </div>
                   </div>
-                  <div style="display:flex; align-items:center; gap:6px;">
-                    <span style="font-size:11px; padding:2px 7px; border-radius:10px; background:#f1f2f4; color:#44546f; font-weight:700;">${count} ${isMeetings ? "total" : "active"}</span>
-                    ${p1Count > 0 ? `<span style="font-size:10px; padding:2px 6px; border-radius:4px; background:${isMeetings ? "#ede9fe" : "#ffd5d2"}; color:${isMeetings ? "#5b21b6" : "#ae2a19"}; font-weight:800;">${p1Count} ${isMeetings ? "urgent" : "P1"}</span>` : ""}
-                  </div>
-                </div>
-              `;
-            }).join("")}
+                `;
+              }).join("")}
+            </div>
           </div>
+        </div>
+
+        <!-- Engineer Presence Tracker Card -->
+        <div class="mgr-panel" style="border-left: 4px solid #7c3aed; display:flex; flex-direction:column; justify-content:space-between;">
+          <div>
+            <h3 style="margin:0 0 12px 0;">👤 Team Presence</h3>
+            
+            ${(() => {
+              // Build list of all engineers from presenceAllUsers + prioritized task owners
+              const knownEngineers = new Set(state.prioritized.map(t => t.owner).filter(Boolean));
+              Object.keys(presenceAllUsers).forEach(n => { if (presenceAllUsers[n].role !== "manager") knownEngineers.add(n); });
+              const engineerList = [...knownEngineers].slice(0, 8);
+              
+              if (engineerList.length === 0) {
+                return `<div style="text-align:center; padding:20px; color:#94a3b8; font-size:12px;">No engineers connected yet.<br>Engineers appear here when they log in.</div>`;
+              }
+              
+              return engineerList.map(eng => {
+                const presence = getPresenceForUser(eng);
+                const status = presence.status;
+                const lastSeen = presence.lastSeen;
+                const statusColor = getStatusColor(status);
+                const statusLabel = getStatusLabel(status);
+                const initial = eng[0].toUpperCase();
+                
+                const engWorkingTaskIds = Object.values(presenceAllUsers).find(p => {
+                  const pName = Object.keys(presenceAllUsers).find(k => presenceAllUsers[k] === p);
+                  return pName === eng;
+                }) ? [] : workingTaskIds.filter(id => {
+                  const t = state.prioritized.find(x => x.id === id);
+                  return t?.owner === eng;
+                });
+                
+                const workingTasks = state.prioritized.filter(t => 
+                  workingTaskIds.includes(t.id) && t.owner === eng
+                );
+                
+                return `
+                  <div style="display:flex; align-items:center; gap:10px; padding:10px; background:#fafbfc; border:1px solid #e2e8f0; border-radius:10px; margin-bottom:8px;">
+                    <div style="position:relative; flex-shrink:0;">
+                      <div style="width:38px; height:38px; border-radius:50%; background:#152238; color:#fff; display:grid; place-items:center; font-weight:800; font-size:15px;">${initial}</div>
+                      <div style="position:absolute; bottom:-2px; right:-2px; width:13px; height:13px; border-radius:50%; background:${statusColor}; border:2px solid #fff;"></div>
+                    </div>
+                    <div style="flex:1; min-width:0;">
+                      <div style="display:flex; align-items:center; gap:6px;">
+                        <strong style="font-size:12.5px; color:#172b4d;">${escapeHtml(eng)}</strong>
+                        <span style="font-size:10px; font-weight:700; color:${statusColor}; background:${statusColor}18; padding:1px 6px; border-radius:999px;">${statusLabel}</span>
+                      </div>
+                      <div style="font-size:10px; color:#94a3b8; margin-top:1px;">
+                        ${status === "online" || status === "dnd" ? "🟢 Active now" : `Last seen: ${formatLastSeen(lastSeen)}`}
+                        ${workingTasks.length > 0 ? ` · Working on ${workingTasks.length} task${workingTasks.length > 1 ? "s" : ""}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }).join("");
+            })()}
+          </div>
+          
+          <button class="secondary" style="font-size:11px; padding:6px 12px; margin-top:12px; width:100%; text-align:center;" data-nav="chat">💬 Open Chat with Engineer</button>
         </div>
       </div>
 
@@ -5982,42 +6859,110 @@ function simulateWorkloadShift() {
 function assignRandomTasks() {
   const TEAM_MEMBERS = ["Utkarsh", "Meera", "Riya", "Rohan", "Neha", "Aisha", "Sanya", "Arjun", "Vikram", "Karan"];
   const activeTasks = state.prioritized.filter(t => !isTaskCompleted(t.id));
+  
   if (activeTasks.length === 0) {
-    alert("No active tasks available to assign.");
+    pushCompanion("agent", "🤖 No active tasks available to assign.", false);
     return;
   }
-  const numTasksToAssign = Math.min(6, activeTasks.length);
-  const shuffledTasks = [...activeTasks].sort(() => 0.5 - Math.random());
-  const selectedTasks = shuffledTasks.slice(0, numTasksToAssign);
   
-  selectedTasks.forEach(task => {
-    const newOwner = TEAM_MEMBERS[Math.floor(Math.random() * TEAM_MEMBERS.length)];
+  const DAILY_CAPACITY = 450;
+  const sevMins = { P1: 45, P2: 60, P3: 75, P4: 90 };
+  
+  // Calculate current workload per engineer based on already-assigned tasks
+  const workload = {};
+  TEAM_MEMBERS.forEach(member => {
+    workload[member] = 0;
+  });
+  
+  activeTasks.forEach(task => {
+    if (task.owner && workload[task.owner] !== undefined) {
+      const estMin = sevMins[task.severity] || 60;
+      workload[task.owner] += estMin;
+    }
+  });
+  
+  // Get unassigned tasks or tasks assigned to "Unassigned"
+  const unassignedTasks = activeTasks.filter(t => !t.owner || t.owner === "Unassigned" || t.owner.trim() === "");
+  
+  if (unassignedTasks.length === 0) {
+    pushCompanion("agent", "🤖 All tasks are already assigned to team members.", false);
+    triggerLocalNotification("No Unassigned Tasks", "All tasks already have owners.");
+    return;
+  }
+  
+  // Sort unassigned tasks by priority: P1 -> P2 -> P3 -> P4, then by deadline
+  const sortedTasks = [...unassignedTasks].sort((a, b) => {
+    const ap = a.severity === "P1" ? 0 : a.severity === "P2" ? 1 : a.severity === "P3" ? 2 : 3;
+    const bp = b.severity === "P1" ? 0 : b.severity === "P2" ? 1 : b.severity === "P3" ? 2 : 3;
+    if (ap !== bp) return ap - bp;
+    if (a.due && b.due) return a.due.localeCompare(b.due);
+    return 0;
+  });
+  
+  let assignedCount = 0;
+  
+  sortedTasks.forEach(task => {
+    const estMin = sevMins[task.severity] || 60;
+    
+    // Find engineer with lowest current workload
+    let bestEngineer = null;
+    let minLoad = Infinity;
+    
+    TEAM_MEMBERS.forEach(member => {
+      if (workload[member] < minLoad) {
+        minLoad = workload[member];
+        bestEngineer = member;
+      }
+    });
+    
+    if (!bestEngineer) return;
+    
+    // Assign task to engineer
     const oldOwner = task.owner || "Unassigned";
     const aliases = task.aliases || [task.id];
+    
     sources.forEach(source => {
       source.items.forEach(item => {
         if (aliases.includes(item.id)) {
-          item.owner = newOwner;
-          reassignedTaskOwners[item.id] = newOwner;
+          item.owner = bestEngineer;
+          reassignedTaskOwners[item.id] = bestEngineer;
         }
       });
     });
+    
     addedTasks.forEach(item => {
       if (aliases.includes(item.id)) {
-        item.owner = newOwner;
-        reassignedTaskOwners[item.id] = newOwner;
+        item.owner = bestEngineer;
+        reassignedTaskOwners[item.id] = bestEngineer;
       }
     });
-    const msg = `Assigned "${task.canonicalTitle}" to ${newOwner} (previously: ${oldOwner})`;
+    
+    workload[bestEngineer] += estMin;
+    assignedCount++;
+    
+    const msg = `Auto-assigned "${task.canonicalTitle}" (${task.severity}) to ${bestEngineer} — workload: ${Math.round(workload[bestEngineer]/60*10)/10}h`;
     managerActivityFeed.unshift({
       message: msg,
       time: new Date().toLocaleTimeString(),
       color: "#22a06b"
     });
-    pushCompanion("agent", `🐾 Assigned "${task.canonicalTitle}" to ${newOwner}!`, false);
+    
+    pushCompanion("agent", `🤖 Auto-assigned "${task.canonicalTitle}" to ${bestEngineer} (${task.severity})`, false);
   });
-  triggerLocalNotification("Tasks Assigned", `Successfully assigned ${numTasksToAssign} tasks randomly to the team.`);
+  
+  if (assignedCount === 0) {
+    pushCompanion("agent", "🤖 No changes made - all tasks are already assigned.", false);
+    return;
+  }
+  
+  triggerLocalNotification("Tasks Auto-Assigned", `Intelligently assigned ${assignedCount} unassigned tasks based on workload and priority.`);
   state = buildState(sources, calendarBlocks);
+  
+  // Rebuild today queue with updated assignments
+  const engineerName = activeProfile === "manager" ? "Manager" : (settingsProfile?.name || "Utkarsh");
+  todayQueue = buildTodayCapacityQueue(state.prioritized, engineerName, taskTimeLogs);
+  todayQueueGeminiScored = false;
+  
   render();
   syncStateWithBackend();
 }
@@ -6028,19 +6973,14 @@ function bindEvents() {
   document.querySelectorAll("[data-nav]").forEach(btn => {
     btn.addEventListener("click", () => {
       const targetPage = btn.dataset.nav;
-      activePage = targetPage;
-      if (targetPage === "inbox" || targetPage === "source-tree") {
-        scrumActiveSource = "all";
-      } else if (targetPage === "mgr-jira") {
-        scrumActiveSource = "jira";
-      } else if (targetPage === "mgr-github") {
-        scrumActiveSource = "github";
-      } else if (targetPage === "mgr-servicenow") {
-        scrumActiveSource = "servicenow";
-      } else if (targetPage === "mgr-email") {
-        scrumActiveSource = "email";
-      } else if (targetPage === "mgr-slack") {
-        scrumActiveSource = "slack";
+      if (["mgr-jira", "mgr-github", "mgr-servicenow", "mgr-email", "mgr-slack"].includes(targetPage)) {
+        scrumActiveSource = targetPage.replace("mgr-", "");
+        activePage = "inbox";
+      } else {
+        activePage = targetPage;
+        if (targetPage === "inbox" || targetPage === "source-tree") {
+          scrumActiveSource = "all";
+        }
       }
       render();
     });
@@ -6086,6 +7026,9 @@ function bindEvents() {
   document.querySelectorAll("[data-task]").forEach(btn => {
     btn.addEventListener("click", () => {
       selectedTaskId = btn.dataset.task;
+      if (activePage === "calendar-ai") {
+        showCalendarTaskModal = true;
+      }
       render();
     });
   });
@@ -6094,8 +7037,14 @@ function bindEvents() {
   const optimizeScheduleBtn = document.querySelector("#optimizeScheduleBtn");
   if (optimizeScheduleBtn) {
     optimizeScheduleBtn.addEventListener("click", () => {
-      optimizeScheduleBtn.innerHTML = "<span>✦</span> Assign Tasks";
-      assignRandomTasks();
+      optimizeScheduleBtn.innerHTML = '<span>⏳</span> Assigning...';
+      optimizeScheduleBtn.disabled = true;
+      
+      setTimeout(() => {
+        assignRandomTasks();
+        optimizeScheduleBtn.innerHTML = '<span>🤖</span> Auto-Assign Tasks';
+        optimizeScheduleBtn.disabled = false;
+      }, 100);
     });
   }
 
@@ -6115,7 +7064,7 @@ function bindEvents() {
     });
   }
 
-  document.querySelectorAll(".cal-legend-item").forEach(item => {
+  document.querySelectorAll(".cal-legend-chip").forEach(item => {
     item.addEventListener("click", () => {
       calendarSelectedEngineer = item.dataset.engineer;
       render();
@@ -6138,6 +7087,77 @@ function bindEvents() {
       adjustSeverity(taskId, newSev);
     });
   });
+
+  // Calendar Task Details Modal Events
+  const closeCalTaskModalBtn = document.querySelector("#closeCalTaskModalBtn");
+  if (closeCalTaskModalBtn) {
+    closeCalTaskModalBtn.addEventListener("click", () => {
+      showCalendarTaskModal = false;
+      render();
+    });
+  }
+
+  const calTaskModalOverlay = document.querySelector("#calTaskModalOverlay");
+  if (calTaskModalOverlay) {
+    calTaskModalOverlay.addEventListener("click", () => {
+      showCalendarTaskModal = false;
+      render();
+    });
+  }
+
+  const modalReassignBtn = document.querySelector("#modalReassignBtn");
+  if (modalReassignBtn) {
+    modalReassignBtn.addEventListener("click", () => {
+      const select = document.querySelector("#modalReassignSelect");
+      if (select) {
+        const newOwner = select.value === "Unassigned" ? "" : select.value;
+        reassignTask(selectedTaskId, newOwner);
+        showCalendarTaskModal = false;
+        render();
+      }
+    });
+  }
+
+  document.querySelectorAll(".modal-sev-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const newSev = btn.dataset.sev;
+      adjustSeverity(selectedTaskId, newSev);
+      render();
+    });
+  });
+
+  const modalToggleWorkingBtn = document.querySelector("#modalToggleWorkingBtn");
+  if (modalToggleWorkingBtn) {
+    modalToggleWorkingBtn.addEventListener("click", () => {
+      const id = selectedTaskId;
+      const isWorking = isTaskWorking(id);
+      if (isWorking) {
+        stopWorkingOnTask(id);
+      } else {
+        startWorkingOnTask(id);
+      }
+      render();
+      syncStateWithBackend();
+    });
+  }
+
+  const modalToggleDoneBtn = document.querySelector("#modalToggleDoneBtn");
+  if (modalToggleDoneBtn) {
+    modalToggleDoneBtn.addEventListener("click", () => {
+      const id = selectedTaskId;
+      const isDone = isTaskCompleted(id);
+      if (isDone) {
+        removeMyCompletion(id);
+        managerActivityFeed = managerActivityFeed.filter(e => e.taskId !== id);
+        if (taskTimeLogs[id]) taskTimeLogs[id].endTime = null;
+        deleteCompletion(getUserEmail(), id);
+      } else {
+        completeTask(id);
+      }
+      render();
+      syncStateWithBackend();
+    });
+  }
 
   // Quick Chat queries in details sidebar
   document.querySelectorAll("[data-query]").forEach(btn => {
@@ -6163,6 +7183,217 @@ function bindEvents() {
     localStorage.removeItem("taskpilot:session");
     render();
   });
+
+  // Discord Status Selector Events
+  const openStatusSelectorBtn = document.querySelector("#openStatusSelectorBtn");
+  if (openStatusSelectorBtn) {
+    openStatusSelectorBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showStatusSelector = !showStatusSelector;
+      render();
+    });
+  }
+
+  document.querySelectorAll(".status-option-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const newStatus = btn.dataset.status;
+      if (activeProfile === "manager") {
+        managerPresenceStatus = newStatus;
+        localStorage.setItem("taskpilot:managerPresence", newStatus);
+      } else {
+        engineerPresenceStatus = newStatus;
+        localStorage.setItem("taskpilot:engineerPresence", newStatus);
+      }
+      // Push immediately to backend so manager sees it
+      lastActivityTime = Date.now();
+      pushPresenceHeartbeat();
+      showStatusSelector = false;
+      render();
+    });
+  });
+
+  const panelSettingsBtn = document.querySelector("#panelSettingsBtn");
+  if (panelSettingsBtn) {
+    panelSettingsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      activePage = "settings";
+      render();
+    });
+  }
+
+  // Close status selector menu when clicking anywhere else
+  document.addEventListener("click", () => {
+    if (showStatusSelector) {
+      showStatusSelector = false;
+      render();
+    }
+  });
+
+  // Chat Page Events
+  if (activePage === "chat") {
+    const chatArea = document.querySelector("#chatMessagesArea");
+    if (chatArea && !chatArea.dataset.scrolled) {
+      chatArea.scrollTop = chatArea.scrollHeight;
+      chatArea.dataset.scrolled = "true";
+    }
+
+    const sendBtn = document.querySelector("#sendChatMessageBtn");
+    const textarea = document.querySelector("#chatMessageInput");
+
+    const handleSend = () => {
+      const text = textarea?.value.trim();
+      let fileData = null;
+      if (chatAttachedFile) {
+        fileData = chatAttachedFile;
+      }
+      if (!text && !fileData) return;
+
+      const sender = activeProfile === "manager" ? "Manager" : "Engineer";
+      let chatMessages = JSON.parse(localStorage.getItem("taskpilot:chatMessages") || "[]");
+      chatMessages.push({
+        id: "msg-" + Date.now() + "-" + Math.random().toString(36).substr(2, 4),
+        sender: sender,
+        text: text,
+        isSystem: false,
+        timestamp: new Date().toISOString(),
+        fileData: fileData
+      });
+      localStorage.setItem("taskpilot:chatMessages", JSON.stringify(chatMessages));
+
+      if (textarea) textarea.value = "";
+      chatAttachedFile = null;
+      render();
+      
+      setTimeout(() => {
+        const area = document.querySelector("#chatMessagesArea");
+        if (area) area.scrollTop = area.scrollHeight;
+      }, 50);
+    };
+
+    if (sendBtn) {
+      sendBtn.addEventListener("click", handleSend);
+    }
+
+    if (textarea) {
+      textarea.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          handleSend();
+        }
+      });
+    }
+
+    const attachBtn = document.querySelector("#attachFileBtn");
+    const fileInput = document.querySelector("#chatFileInput");
+    if (attachBtn && fileInput) {
+      attachBtn.addEventListener("click", () => {
+        fileInput.click();
+      });
+
+      fileInput.addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (file.size > 800 * 1024) {
+          alert("File size exceeds 800KB. For demo purposes, we will mock the PDF upload to prevent local storage quota overflow.");
+          chatAttachedFile = {
+            name: file.name,
+            type: file.type || "application/pdf",
+            dataUrl: null
+          };
+        } else {
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            chatAttachedFile = {
+              name: file.name,
+              type: file.type || "application/pdf",
+              dataUrl: evt.target.result
+            };
+            const preview = document.querySelector("#chatAttachmentPreview");
+            const previewName = document.querySelector("#chatAttachedFileName");
+            if (preview && previewName) {
+              previewName.textContent = file.name;
+              preview.style.display = "flex";
+            }
+          };
+          reader.readAsDataURL(file);
+        }
+
+        const preview = document.querySelector("#chatAttachmentPreview");
+        const previewName = document.querySelector("#chatAttachedFileName");
+        if (preview && previewName) {
+          previewName.textContent = file.name;
+          preview.style.display = "flex";
+        }
+      });
+    }
+
+    const clearAttachBtn = document.querySelector("#clearChatAttachmentBtn");
+    if (clearAttachBtn) {
+      clearAttachBtn.addEventListener("click", () => {
+        chatAttachedFile = null;
+        const preview = document.querySelector("#chatAttachmentPreview");
+        if (preview) preview.style.display = "none";
+        const fileInput = document.querySelector("#chatFileInput");
+        if (fileInput) fileInput.value = "";
+      });
+    }
+
+    const quickAttachBtn = document.querySelector("#quickAttachReportBtn");
+    if (quickAttachBtn) {
+      quickAttachBtn.addEventListener("click", () => {
+        chatAttachedFile = {
+          name: `EOD_Priority_Report_${new Date().toISOString().slice(0,10)}.pdf`,
+          type: "application/pdf",
+          dataUrl: null
+        };
+        const preview = document.querySelector("#chatAttachmentPreview");
+        const previewName = document.querySelector("#chatAttachedFileName");
+        if (preview && previewName) {
+          previewName.textContent = chatAttachedFile.name;
+          preview.style.display = "flex";
+        }
+        const textarea = document.querySelector("#chatMessageInput");
+        if (textarea && !textarea.value) {
+          textarea.value = "Here is the compiled End of Day (EOD) Sprint Workload & Priority PDF report for your review.";
+        }
+      });
+    }
+
+    document.querySelectorAll(".chat-download-btn").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        activePreviewMessageId = btn.dataset.fileId;
+        render();
+      });
+    });
+  }
+
+  // Document preview modal events
+  const closePreviewModalBtn = document.querySelector("#closePreviewModalBtn");
+  if (closePreviewModalBtn) {
+    closePreviewModalBtn.addEventListener("click", () => {
+      activePreviewMessageId = null;
+      render();
+    });
+  }
+
+  const closePreviewModalBtn2 = document.querySelector("#closePreviewModalBtn2");
+  if (closePreviewModalBtn2) {
+    closePreviewModalBtn2.addEventListener("click", () => {
+      activePreviewMessageId = null;
+      render();
+    });
+  }
+
+  const filePreviewModalOverlay = document.querySelector("#filePreviewModalOverlay");
+  if (filePreviewModalOverlay) {
+    filePreviewModalOverlay.addEventListener("click", () => {
+      activePreviewMessageId = null;
+      render();
+    });
+  }
 
   // ─── Manager: Assign task via Gemini ─────────────────────────────────────
   document.querySelector("#mgrPostAssignBtn")?.addEventListener("click", async () => {
@@ -6370,23 +7601,8 @@ function bindEvents() {
   document.querySelectorAll("[data-task-start]").forEach(btn => {
     btn.addEventListener("click", () => {
       const id = btn.dataset.taskStart;
-      if (!workingTaskIds.includes(id)) workingTaskIds = [...workingTaskIds, id];
-      setMyWorkingIds([...new Set([...getMyWorkingIds(), id])]);
       selectedTaskId = id;
-      const task = state.prioritized.find(t => t.id === id);
-      // Log start time
-      if (task && !taskTimeLogs[id]) {
-        taskTimeLogs[id] = {
-          title: task.canonicalTitle,
-          severity: task.severity,
-          source: task.sources?.join(" + ") || task.sourceId,
-          startTime: new Date().toISOString(),
-          endTime: null
-        };
-      }
-      // Persist to Supabase
-      if (task) saveWorkingTask(getUserEmail(), getUserName(), id, task.canonicalTitle);
-      if (task) pushCompanion("agent", `Woof! 🐾 Started working on "${task.canonicalTitle}". I'll keep my eyes on your progress and help you fetch results! Ruff!`, false);
+      startWorkingOnTask(id);
       render();
       syncStateWithBackend();
     });
@@ -6396,10 +7612,7 @@ function bindEvents() {
   document.querySelectorAll("[data-task-cancel]").forEach(btn => {
     btn.addEventListener("click", () => {
       const id = btn.dataset.taskCancel;
-      workingTaskIds = workingTaskIds.filter(x => x !== id);
-      setMyWorkingIds(getMyWorkingIds().filter(x => x !== id));
-      deleteWorkingTask(getUserEmail(), id);
-      delete taskTimeLogs[id];
+      stopWorkingOnTask(id);
       render();
       syncStateWithBackend();
     });
@@ -6949,16 +8162,7 @@ function bindEvents() {
       scrumActiveSource = el.dataset.scrumSource;
       
       // Update activePage so that the sidebar highlights stay perfectly in sync!
-      if (activeProfile === "manager") {
-        if (scrumActiveSource === "all") activePage = "inbox";
-        else if (scrumActiveSource === "jira") activePage = "mgr-jira";
-        else if (scrumActiveSource === "github") activePage = "mgr-github";
-        else if (scrumActiveSource === "servicenow") activePage = "mgr-servicenow";
-        else if (scrumActiveSource === "email") activePage = "mgr-email";
-        else if (scrumActiveSource === "slack") activePage = "mgr-slack";
-      } else {
-        activePage = "inbox";
-      }
+      activePage = "inbox";
       
       render();
       setTimeout(() => {
@@ -9037,10 +10241,12 @@ function completeTask(id) {
   };
   addMyCompletion(row);
   // Remove from working in store
+  workingTaskIds = workingTaskIds.filter(x => x !== id);
   setMyWorkingIds(getMyWorkingIds().filter(x => x !== id));
   // Fire-and-forget Supabase save
   saveCompletion(getUserEmail(), getUserName(), task, timeSpentMin, wasOnTime);
   deleteWorkingTask(getUserEmail(), id);
+  updateAutoPresenceStatus();
 
   // Build manager notification
   const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
@@ -9062,6 +10268,18 @@ function completeTask(id) {
     postedAt: now.toISOString(),
     type: "completion"
   }, ...managerTaskPosts];
+
+  // Append system message to chat automatically
+  const completedChatMsg = {
+    id: "msg-" + Date.now() + "-" + Math.random().toString(36).substr(2, 4),
+    sender: "System",
+    text: `🤖 ✓ ${settingsProfile.name} completed task ${task.id}: "${task.canonicalTitle}" (${task.severity})`,
+    isSystem: true,
+    timestamp: new Date().toISOString()
+  };
+  const currentChatMessages = JSON.parse(localStorage.getItem("taskpilot:chatMessages") || "[]");
+  currentChatMessages.push(completedChatMsg);
+  localStorage.setItem("taskpilot:chatMessages", JSON.stringify(currentChatMessages));
 
   // Handoff & next selection
   const queue = activeQueue();
@@ -9363,11 +10581,14 @@ loadBackendConfig().finally(async () => {
   completedTaskIds = getMyCompletedIds();
   workingTaskIds   = getMyWorkingIds();
 
-  // Rebuild today queue with updated profile name after config loaded
-  const engineerName = activeProfile === "manager" ? "Manager" : (settingsProfile?.name || demoProfiles[activeProfile]?.name || "Utkarsh");
+  // Rebuild today queue with real user name (not role label)
+  const engineerName = activeProfile === "manager" ? "Manager" : (settingsProfile?.name || null);
   todayQueue = buildTodayCapacityQueue(state.prioritized, engineerName, taskTimeLogs);
   depGraph = buildDependencyGraph(state.prioritized);
   safeRender();
+
+  // Start presence heartbeat — push status to backend every 5s
+  startPresenceHeartbeat();
 
   // Sync completions from Supabase (background, then re-render)
   syncCompletionsFromSupabase().then(() => {

@@ -80,20 +80,29 @@ export function buildTodayCapacityQueue(prioritizedTasks, engineerName, taskTime
   const DAILY_CAPACITY = 450; // 7.5 hours in minutes
   const MIN_TASKS = 7; // Always show at least 7 tasks
   
-  // Reduced time estimates for more realistic daily load
   const sevMins = { P1: 45, P2: 60, P3: 75, P4: 90 };
   
-  // Filter by engineer first
+  // Filter by engineer — only if name is a real person name (not "Full-stack Engineer", "Manager", etc.)
   let myTasks = prioritizedTasks;
-  if (engineerName && !engineerName.toLowerCase().includes("manager") && engineerName !== "Unassigned") {
+  const isRoleLabel = !engineerName ||
+    engineerName.toLowerCase().includes("manager") ||
+    engineerName.toLowerCase().includes("engineer") ||
+    engineerName.toLowerCase().includes("unassigned") ||
+    engineerName.trim() === "";
+
+  if (!isRoleLabel) {
     const firstName = engineerName.toLowerCase().split(" ")[0];
-    myTasks = prioritizedTasks.filter(t =>
+    const filtered = prioritizedTasks.filter(t =>
       !t.owner || t.owner.toLowerCase().includes(firstName)
     );
+    // Only use the name filter if it actually returns tasks; otherwise show all
+    if (filtered.length >= 3) {
+      myTasks = filtered;
+    }
   }
   
   // Sort by priority: P1 → P2 → P3 → P4, then by deadline
-  myTasks = myTasks.sort((a, b) => {
+  myTasks = [...myTasks].sort((a, b) => {
     const ap = a.severity === "P1" ? 0 : a.severity === "P2" ? 1 : a.severity === "P3" ? 2 : 3;
     const bp = b.severity === "P1" ? 0 : b.severity === "P2" ? 1 : b.severity === "P3" ? 2 : 3;
     if (ap !== bp) return ap - bp;
@@ -109,28 +118,26 @@ export function buildTodayCapacityQueue(prioritizedTasks, engineerName, taskTime
     // Skip completed tasks
     if (task.status === "Done" || task.status === "Completed") continue;
     
-    // Estimate time for this task (use smaller estimates)
     const avgLog = taskTimeLogs[task.id];
     const estMin = avgLog?.endTime && avgLog?.startTime
       ? Math.max(15, Math.round((new Date(avgLog.endTime) - new Date(avgLog.startTime)) / 60000))
       : sevMins[task.severity] || 60;
     
-    // Add tasks up to capacity OR minimum count
     if (todayQueue.length < MIN_TASKS || usedMinutes + estMin <= DAILY_CAPACITY) {
       todayQueue.push(task);
       usedMinutes += estMin;
     } else if (todayQueue.length >= MIN_TASKS && usedMinutes >= DAILY_CAPACITY) {
-      // Stop once we have minimum tasks AND reached capacity
       break;
     }
   }
   
-  // Always return at least MIN_TASKS (unless not enough tasks exist)
-  if (todayQueue.length < MIN_TASKS && myTasks.length >= MIN_TASKS) {
-    return myTasks.slice(0, MIN_TASKS);
+  // Always return at least MIN_TASKS — fall back to full list if needed
+  if (todayQueue.length < MIN_TASKS) {
+    const fallback = myTasks.filter(t => t.status !== "Done" && t.status !== "Completed");
+    return fallback.slice(0, Math.max(MIN_TASKS, todayQueue.length));
   }
   
-  return todayQueue.length > 0 ? todayQueue : myTasks.slice(0, Math.min(MIN_TASKS, myTasks.length));
+  return todayQueue;
 }
 
 export function normalize(text) {

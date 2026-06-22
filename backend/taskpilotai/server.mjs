@@ -109,6 +109,10 @@ async function initializeAgent() {
 // In-memory manager task post store (persists across requests while server is running)
 let managerTaskPosts = [];
 
+// ─── In-Memory Presence Store ─────────────────────────────────────────────────
+// { [userName]: { status, lastSeen, role, email } }
+const presenceStore = {};
+
 export function loadTaskPilotData() {
   const sourceFiles = [
     "jira_sprint_board.json",
@@ -1216,6 +1220,48 @@ Return ONLY valid JSON.`;
       sendJson(response, { meetings: ranked, success: true });
     } catch (err) {
       sendJson(response, { error: err.message, success: false }, 500);
+    }
+    return;
+  }
+
+  // ─── Presence API ─────────────────────────────────────────────────────────────
+  if (url.pathname === "/api/presence/heartbeat" && request.method === "POST") {
+    try {
+      const body = await readBody(request);
+      const data = body ? JSON.parse(body) : {};
+      const { name, status, role, email } = data;
+      if (name) {
+        presenceStore[name] = {
+          status: status || "online",
+          lastSeen: new Date().toISOString(),
+          role: role || "engineer",
+          email: email || ""
+        };
+      }
+      sendJson(response, { success: true });
+    } catch (err) {
+      sendJson(response, { error: err.message }, 500);
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/presence/all" && request.method === "GET") {
+    sendJson(response, { presence: presenceStore });
+    return;
+  }
+
+  if (url.pathname === "/api/presence/offline" && request.method === "POST") {
+    try {
+      const body = await readBody(request);
+      const data = body ? JSON.parse(body) : {};
+      const { name } = data;
+      if (name && presenceStore[name]) {
+        presenceStore[name].status = "offline";
+        presenceStore[name].lastSeen = new Date().toISOString();
+      }
+      sendJson(response, { success: true });
+    } catch (err) {
+      sendJson(response, { error: err.message }, 500);
     }
     return;
   }
